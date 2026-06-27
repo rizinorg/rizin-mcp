@@ -1,0 +1,45 @@
+[package]
+name = "rizin-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+license = "LGPL-3.0-or-later"
+description = "Model Context Protocol server exposing the Rizin reverse-engineering framework"
+readme = "README.md"
+repository = "https://github.com/rizinorg/rizin-mcp"
+homepage = "https://rizin.re"
+keywords = ["mcp", "rizin", "reverse-engineering", "disassembler", "security"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "rizin-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "rizin_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.103"
+base64 = "0.22.1"
+clap = { version = "4.6.1", features = ["derive"] }
+rmcp = { version = "1.8.0", features = ["server", "transport-io"] }
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "io-std", "sync", "process", "time"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+proptest = "1.11.0"
+
+[features]
+# The `api` backend links Rizin's C libraries (librz_core et al.) and runs
+# commands in-process for speed. It requires the Rizin development libraries to
+# be discoverable via pkg-config at build time. Disable it
+# (`--no-default-features`) to build a pipe-only server that needs no Rizin
+# libraries to compile (only a `rizin` binary at runtime).
+default = ["api"]
+api = []
