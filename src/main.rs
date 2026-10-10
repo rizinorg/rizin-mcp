@@ -123,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
+    let transport_mode = config.transport.clone();
     let server = RizinServer::new(config);
 
     if let Some(file) = cli.file.as_deref() {
@@ -138,7 +139,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    tracing::info!("starting rizin-mcp on stdio");
+    tracing::info!("starting rizin-mcp on stdio in {0:?} mode", transport_mode);
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
