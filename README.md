@@ -320,6 +320,11 @@ cargo test --no-default-features
 RIZIN_MCP_BENCH_RIZIN=/path/to/rizin cargo run --release --example bench
 ```
 
+CI (`.github/workflows/ci.yml`) builds Rizin `dev` and the latest release
+into a user prefix — the multiarch layout of the documented install path —
+and builds, lints, starts (without `LD_LIBRARY_PATH`), and tests the server
+against each; it also runs nightly to catch drift on Rizin's `dev` branch.
+
 The end-to-end tests run against **both** backends: the in-process `api` backend
 (always available when compiled in) and the `pipe` backend (skipped if a `rizin`
 process can't be launched).
