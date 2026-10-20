@@ -47,7 +47,8 @@ const RESOURCES: &[(&str, &str, &str)] = &[
 const INSTRUCTIONS: &str = "\
 Drive the Rizin reverse-engineering framework. Start by calling `open_file` with \
 a path (analysis defaults to `basic`/`aa`; use `analyze` for deeper passes). Then \
-explore with `list_functions`, `disassemble_function`, `decompile`, `binary_info`, \
+explore with `list_functions`, `function_summary` (a function at a glance), \
+`disassemble_function`, `decompile`, `binary_info`, \
 `headers`, `list_strings`, `imports`/`exports`/`symbols`, `xrefs_to`/`xrefs_from`, \
 and the search tools (`search_string`, `search_bytes`, `search_value`, `search_rop`, \
 `search_magic`, `search_crypto`). Inspect function signatures with \
@@ -311,6 +312,94 @@ impl RizinServer {
             .and_then(Value::as_u64)
             .map_or(addr, |o| format!("0x{o:x}"));
         Ok((start, func))
+    }
+
+    /// Decompile the function at `suffix` (an `at_suffix`) with the engine
+    /// selection `which`, returning the engine used, its text, and the
+    /// engines skipped and why.
+    async fn decompile_text(
+        &self,
+        suffix: &str,
+        which: &str,
+    ) -> Result<(&'static str, String, serde_json::Map<String, Value>), ErrorData> {
+        // (engine name, command) candidates for each selection.
+        let ghidra = ("ghidra", format!("pdg{suffix}"));
+        let jsdec = ("jsdec", format!("pdd{suffix}"));
+        // Pseudo-disassembly of the whole function, with temporary evals so the
+        // global settings are left untouched. Without the jump arrows
+        // (`asm.lines`), which Rizin omits from captured in-process output, the
+        // text is the same on both backends. `pdr` walks the basic blocks:
+        // `pdf` spends seconds per pointer operand in a large function.
+        let pseudo = (
+            "pseudo",
+            format!("pdr @e:asm.pseudo=true @e:asm.lines=false{suffix}"),
+        );
+
+        let candidates: Vec<(&'static str, String)> = match which {
+            "auto" => vec![ghidra, jsdec, pseudo],
+            "ghidra" => vec![ghidra],
+            "jsdec" => vec![jsdec],
+            "pseudo" => vec![pseudo],
+            other => {
+                return Err(RizinError::InvalidArgument {
+                    arg: other.to_string(),
+                    reason: "decompiler must be auto, ghidra, jsdec, or pseudo".into(),
+                }
+                .to_error_data());
+            }
+        };
+
+        // Only a missing plugin (or an empty result) moves on to the next
+        // engine: an engine that ran and failed (e.g. no function there) would
+        // fail the same way in the next one, and a timeout or dead session
+        // must not be retried.
+        let mut skipped = serde_json::Map::new();
+        for (engine, cmd) in candidates {
+            let out = self.manager.exec(&cmd).await.mcp()?;
+            match crate::backend::check(&cmd, out) {
+                Ok(out) if !out.output.trim().is_empty() => {
+                    return Ok((engine, out.output, skipped));
+                }
+                // A pipe to Rizin before 0.10 sees a failure only as no output
+                // and an error message.
+                Ok(out) if out.messages.iter().any(|m| m.starts_with("ERROR")) => {
+                    return Err(RizinError::CommandFailed {
+                        cmd,
+                        status: out.status,
+                        detail: out.detail(),
+                    }
+                    .to_error_data());
+                }
+                Ok(_) => {
+                    skipped.insert(engine.to_string(), json!("no output"));
+                }
+                Err(RizinError::CommandFailed {
+                    status: CmdStatus::NonExistingCmd,
+                    ..
+                }) => {
+                    skipped.insert(engine.to_string(), json!("not installed"));
+                }
+                Err(e) => return Err(e.to_error_data()),
+            }
+        }
+
+        let missing = skipped.values().any(|v| v == "not installed");
+        let hint = if missing {
+            "no decompiler output: the requested engine is not installed. Install the \
+             rz-ghidra (pdg) or jsdec (pdd) plugin, or use decompiler=\"pseudo\"."
+        } else {
+            "no decompiler output for the function at this location."
+        };
+        Err(RizinError::NotPermitted(hint.into()).to_error_data())
+    }
+
+    /// The flag name at `addr` (`fd`: the nearest flag and an offset).
+    async fn name_at(&self, addr: u64) -> String {
+        self.manager
+            .cmd(&format!("fd @ 0x{addr:x}"))
+            .await
+            .map(|n| n.trim().to_string())
+            .unwrap_or_default()
     }
 
     /// Guard used by the raw command tools.
@@ -719,6 +808,127 @@ impl RizinServer {
         Ok(self.listing(self.manager.cmdj("aflj").await.mcp()?, &p))
     }
 
+    /// Aggregate view of a function in one call.
+    #[tool(
+        description = "Summarize the function containing a location in one call: its name, \
+        address, size, blocks, signature, callers, callees, the strings it references, and \
+        the start of its decompilation (best engine available). `max_items` caps each list \
+        (default 20) and `snippet_lines` the decompilation (default 30); totals say what \
+        was left out."
+    )]
+    async fn function_summary(
+        &self,
+        Parameters(p): Parameters<FunctionSummaryParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let max_items = clamp_count(p.max_items, 20, 100) as usize;
+        let snippet_lines = clamp_count(p.snippet_lines, 30, 500) as usize;
+        let (addr, info) = self.function_at(&p.at).await?;
+        let refs = |key: &str, kind: &str| -> Vec<u64> {
+            let mut seen = Vec::new();
+            for r in info
+                .get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if r.get("type").and_then(Value::as_str) != Some(kind) {
+                    continue;
+                }
+                if let Some(to) = r.get("to").and_then(Value::as_u64)
+                    && !seen.contains(&to)
+                {
+                    seen.push(to);
+                }
+            }
+            seen
+        };
+
+        let callee_addrs = refs("callrefs", "CALL");
+        let mut callees = Vec::new();
+        for &to in callee_addrs.iter().take(max_items) {
+            callees.push(json!({ "addr": format!("0x{to:x}"), "name": self.name_at(to).await }));
+        }
+
+        let xrefs = self.manager.cmdj(&format!("axtj @ {addr}")).await.mcp()?;
+        let xrefs = xrefs.as_array().cloned().unwrap_or_default();
+        let mut callers = Vec::new();
+        for x in xrefs.iter().take(max_items) {
+            let from = x.get("from").and_then(Value::as_u64).unwrap_or(0);
+            callers.push(json!({
+                "from": format!("0x{from:x}"),
+                "type": x.get("type"),
+                "name": self.name_at(from).await,
+            }));
+        }
+
+        // Data references into the binary's strings. A reference often points
+        // into a string whose tail another string shares, and `ps` would guess
+        // its encoding anew, so the strings come from `izj`.
+        let table = self.cmdj_optional("izj", json!([])).await?;
+        let table: Vec<(u64, u64, &Value)> = table
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| Some((s.get("vaddr")?.as_u64()?, s.get("size")?.as_u64()?, s)))
+            .collect();
+        let mut strings = Vec::new();
+        let mut string_refs = 0;
+        for to in refs("datarefs", "DATA") {
+            let Some((start, _, entry)) = table
+                .iter()
+                .find(|(start, size, _)| (*start..start + size).contains(&to))
+            else {
+                continue;
+            };
+            string_refs += 1;
+            if strings.len() >= max_items {
+                continue;
+            }
+            let text = entry.get("string").and_then(Value::as_str).unwrap_or("");
+            let offset = (to - start) as usize;
+            let ascii = matches!(
+                entry.get("type").and_then(Value::as_str),
+                Some("ascii" | "utf8")
+            );
+            // The referenced tail, when byte offsets are character offsets.
+            let tail = text.get(offset..).filter(|_| ascii);
+            strings.push(json!({
+                "addr": format!("0x{to:x}"),
+                "string": tail.unwrap_or(text),
+                "offset_in_string": if tail.is_some() { 0 } else { offset },
+            }));
+        }
+
+        let snippet = match self.decompile_text(&format!(" @ {addr}"), "auto").await {
+            Ok((engine, text, _)) => {
+                let lines: Vec<&str> = text.lines().collect();
+                json!({
+                    "engine": engine,
+                    "total_lines": lines.len(),
+                    "text": lines[..lines.len().min(snippet_lines)].join("\n"),
+                })
+            }
+            Err(e) => json!({ "error": e.message }),
+        };
+
+        let field = |k: &str| info.get(k).cloned().unwrap_or(Value::Null);
+        Ok(self.json_result(json!({
+            "name": field("name"),
+            "addr": addr,
+            "size": field("size"),
+            "blocks": field("nbbs"),
+            "cyclomatic_complexity": field("cc"),
+            "args": field("nargs"),
+            "locals": field("nlocals"),
+            "signature": field("signature"),
+            "noreturn": field("noreturn"),
+            "callers": { "total": xrefs.len(), "items": callers },
+            "callees": { "total": callee_addrs.len(), "items": callees },
+            "strings": { "total": string_refs, "items": strings },
+            "decompiled": snippet,
+        })))
+    }
+
     /// Function info (`afij`).
     #[tool(
         description = "Detailed info for the function at a location: bounds, stack frame, \
@@ -862,79 +1072,8 @@ impl RizinServer {
     ) -> Result<CallToolResult, ErrorData> {
         let suffix = at_suffix(&p.at).mcp()?;
         let which = p.decompiler.as_deref().unwrap_or("auto").to_lowercase();
-
-        // (engine name, command) candidates for each selection.
-        let ghidra = ("ghidra", format!("pdg{suffix}"));
-        let jsdec = ("jsdec", format!("pdd{suffix}"));
-        // Pseudo-disassembly of the whole function, with temporary evals so the
-        // global settings are left untouched. Without the jump arrows
-        // (`asm.lines`), which Rizin omits from captured in-process output, the
-        // text is the same on both backends. `pdr` walks the basic blocks:
-        // `pdf` spends seconds per pointer operand in a large function.
-        let pseudo = (
-            "pseudo",
-            format!("pdr @e:asm.pseudo=true @e:asm.lines=false{suffix}"),
-        );
-
-        let candidates: Vec<(&str, String)> = match which.as_str() {
-            "auto" => vec![ghidra, jsdec, pseudo],
-            "ghidra" => vec![ghidra],
-            "jsdec" => vec![jsdec],
-            "pseudo" => vec![pseudo],
-            other => {
-                return Err(RizinError::InvalidArgument {
-                    arg: other.to_string(),
-                    reason: "decompiler must be auto, ghidra, jsdec, or pseudo".into(),
-                }
-                .to_error_data());
-            }
-        };
-
-        // Only a missing plugin (or an empty result) moves on to the next
-        // engine: an engine that ran and failed (e.g. no function there) would
-        // fail the same way in the next one, and a timeout or dead session
-        // must not be retried.
-        let mut skipped = serde_json::Map::new();
-        for (engine, cmd) in &candidates {
-            let out = self.manager.exec(cmd).await.mcp()?;
-            match crate::backend::check(cmd, out) {
-                Ok(out) if !out.output.trim().is_empty() => {
-                    return Ok(self.text_result_meta(
-                        out.output,
-                        json!({ "decompiler": engine, "skipped": skipped }),
-                    ));
-                }
-                // A pipe to Rizin before 0.10 sees a failure only as no output
-                // and an error message.
-                Ok(out) if out.messages.iter().any(|m| m.starts_with("ERROR")) => {
-                    return Err(RizinError::CommandFailed {
-                        cmd: cmd.clone(),
-                        status: out.status,
-                        detail: out.detail(),
-                    }
-                    .to_error_data());
-                }
-                Ok(_) => {
-                    skipped.insert(engine.to_string(), json!("no output"));
-                }
-                Err(RizinError::CommandFailed {
-                    status: CmdStatus::NonExistingCmd,
-                    ..
-                }) => {
-                    skipped.insert(engine.to_string(), json!("not installed"));
-                }
-                Err(e) => return Err(e.to_error_data()),
-            }
-        }
-
-        let missing = skipped.values().any(|v| v == "not installed");
-        let hint = if missing {
-            "no decompiler output: the requested engine is not installed. Install the \
-             rz-ghidra (pdg) or jsdec (pdd) plugin, or use decompiler=\"pseudo\"."
-        } else {
-            "no decompiler output for the function at this location."
-        };
-        Err(RizinError::NotPermitted(hint.into()).to_error_data())
+        let (engine, text, skipped) = self.decompile_text(&suffix, &which).await?;
+        Ok(self.text_result_meta(text, json!({ "decompiler": engine, "skipped": skipped })))
     }
 
     /// Report which decompiler engines are available (`Lcj`).
@@ -2042,7 +2181,8 @@ impl RizinServer {
             PromptMessageRole::User,
             format!(
                 "Analyze the function at {addr} in depth. Start with \
-                 `function_info {{\"at\": \"{addr}\"}}` for its bounds and signature, then \
+                 `function_summary {{\"at\": \"{addr}\"}}` for its signature, callers, \
+                 callees and strings, then \
                  `disassemble_function` and `decompile`. Use `function_variables` for locals \
                  and arguments, `xrefs_to` to see callers and `xrefs_from`/`function_graph` to \
                  understand its behavior. Explain what the function does, its inputs and \

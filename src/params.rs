@@ -126,6 +126,20 @@ pub struct FunctionPageParams {
     pub page: PageParams,
 }
 
+/// Parameters for `function_summary`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FunctionSummaryParams {
+    /// A location inside the function (hex address or flag/symbol name).
+    pub at: String,
+    /// Maximum number of callers, callees and strings listed (default 20,
+    /// at most 100).
+    #[serde(default)]
+    pub max_items: Option<u64>,
+    /// Number of decompiled lines included (default 30, at most 500).
+    #[serde(default)]
+    pub snippet_lines: Option<u64>,
+}
+
 /// Parameters for `analyze`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct AnalyzeParams {
