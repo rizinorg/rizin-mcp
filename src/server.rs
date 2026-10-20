@@ -581,11 +581,29 @@ impl RizinServer {
         &self,
         Parameters(p): Parameters<FlagsParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let cmd = match &p.space {
-            Some(space) => format!("fs {};flj", validate_location(space).mcp()?),
-            None => "flj".to_string(),
+        let flags = match &p.space {
+            Some(space) => {
+                let space = validate_location(space).mcp()?;
+                // `fs <space>` would select the space for every later `flj`,
+                // and `fss+` creates a space that does not exist.
+                let spaces = self.cmdj_optional("fslj", json!([])).await?;
+                let exists = spaces
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|s| s.get("name").and_then(Value::as_str) == Some(space.as_str()));
+                if exists {
+                    self.manager
+                        .cmdj(&format!("fss+ {space};flj;fss-"))
+                        .await
+                        .mcp()?
+                } else {
+                    json!([])
+                }
+            }
+            None => self.manager.cmdj("flj").await.mcp()?,
         };
-        Ok(self.listing(self.manager.cmdj(&cmd).await.mcp()?, &p.page))
+        Ok(self.listing(flags, &p.page))
     }
 
     /// Flag spaces (`fslj`).
