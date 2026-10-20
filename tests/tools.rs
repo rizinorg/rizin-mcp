@@ -933,3 +933,41 @@ async fn function_summary_aggregates_in_one_call() {
         );
     }
 }
+
+#[tokio::test]
+async fn samples_can_be_sent_as_data() {
+    use base64::Engine as _;
+    let elf = std::fs::read(target()).expect("read target");
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&elf);
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        let info = s
+            .ok(
+                "open_data",
+                json!({ "data": b64, "name": "sample.elf", "analysis": "none" }),
+            )
+            .await;
+        let path = info["file"].as_str().unwrap().to_string();
+        assert!(path.ends_with("-sample.elf"), "{t:?}: {path}");
+        assert!(std::path::Path::new(&path).exists(), "{t:?}");
+        let bin = s.ok("binary_info", json!({})).await;
+        assert_eq!(bin["core"]["size"], elf.len(), "{t:?}");
+        // The copy goes away with the session.
+        s.ok("close_file", json!({})).await;
+        assert!(!std::path::Path::new(&path).exists(), "{t:?}: {path} left");
+
+        // Hex works too: `nop; nop; ret` on a raw blob.
+        let blob = s
+            .ok(
+                "open_data",
+                json!({ "data": "9090c3", "encoding": "hex", "analysis": "none" }),
+            )
+            .await;
+        assert_eq!(blob["info"]["core"]["size"], 3, "{t:?}: {blob}");
+        let err = s
+            .call("open_data", json!({ "data": "not base64!" }))
+            .await
+            .expect_err("bad base64");
+        assert_eq!(err.code.0, -32602, "{t:?}");
+    }
+}

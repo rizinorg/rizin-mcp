@@ -73,6 +73,8 @@ produces the full listing, which the server then slices.
 **Session**
 - `open_file` — open a binary/file or Rizin URI (`malloc://`, `hex://`, …) and run
   analysis; `-` opens a session with no file
+- `open_data` — open a file sent as base64 (or hex) data, e.g. a sample attached
+  in the chat; it lives in a private temporary file deleted with the session
 - `close_file`, `session_info`, `analyze` (none/basic/full/experimental), `seek`
 - `command`, `command_json` — raw Rizin passthrough (see *Security* below)
 

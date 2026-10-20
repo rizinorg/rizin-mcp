@@ -41,6 +41,27 @@ pub struct PageParams {
     pub limit: Option<u64>,
 }
 
+/// Parameters for `open_data`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OpenDataParams {
+    /// The file's bytes, encoded as `encoding` says.
+    pub data: String,
+    /// `base64` (default) or `hex`.
+    #[serde(default)]
+    pub encoding: Option<String>,
+    /// A file name to show for it, e.g. `sample.exe`. Defaults to
+    /// `sample.bin`.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Analysis depth to run immediately after opening. Defaults to `basic`.
+    #[serde(default)]
+    pub analysis: Option<AnalysisLevel>,
+    /// Open in write mode (changes stay in the temporary copy). Requires the
+    /// server to be started with `--allow-write`.
+    #[serde(default)]
+    pub write: Option<bool>,
+}
+
 /// Parameters for tools that operate at an optional location.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct AtParams {
