@@ -534,7 +534,13 @@ impl RizinServer {
     /// currently open file.
     #[tool(
         description = "Open a binary file (or Rizin URI like malloc://512) and run \
-        initial analysis. Returns binary info. Replaces any currently open file."
+        initial analysis. Returns binary info. Replaces any currently open file.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn open_file(
         &self,
@@ -550,7 +556,13 @@ impl RizinServer {
     #[tool(
         description = "Open a file sent as data (base64 by default, or hex) instead of a path, \
         e.g. a sample attached in the chat, and run initial analysis like open_file. The bytes \
-        go to a private temporary file deleted when the session ends. Up to 64 MiB."
+        go to a private temporary file deleted when the session ends. Up to 64 MiB.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn open_data(
         &self,
@@ -593,7 +605,15 @@ impl RizinServer {
     }
 
     /// Close the current session.
-    #[tool(description = "Close the currently open file and tear down the Rizin session.")]
+    #[tool(
+        description = "Close the currently open file and tear down the Rizin session.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn close_file(&self) -> Result<CallToolResult, ErrorData> {
         let closed = self.manager.close().await;
         Ok(self.text_result(if closed {
@@ -604,7 +624,10 @@ impl RizinServer {
     }
 
     /// Report current session state and binary info.
-    #[tool(description = "Report whether a file is open, its path/mode, and binary info (ij).")]
+    #[tool(
+        description = "Report whether a file is open, its path/mode, and binary info (ij).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn session_info(&self) -> Result<CallToolResult, ErrorData> {
         let state = self.manager.state().await;
         let info = self.manager.cmdj("ij").await.unwrap_or(Value::Null);
@@ -614,7 +637,13 @@ impl RizinServer {
     /// Run analysis at a chosen depth.
     #[tool(
         description = "Run Rizin analysis at the given level (none/basic/full/experimental; \
-        default full = aaa). Returns the resulting function count."
+        default full = aaa). Returns the resulting function count.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn analyze(
         &self,
@@ -635,7 +664,15 @@ impl RizinServer {
     }
 
     /// Seek to an address/flag and report the new offset.
-    #[tool(description = "Seek to an address or flag/symbol, returning the new current offset.")]
+    #[tool(
+        description = "Seek to an address or flag/symbol, returning the new current offset.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn seek(
         &self,
         Parameters(p): Parameters<AddressParams>,
@@ -652,7 +689,13 @@ impl RizinServer {
         multiple commands with ';'. When Rizin reports a failure (e.g. an unknown \
         command), the result is an error carrying the status, Rizin's messages, and \
         whatever was printed before the failure. This exposes the full Rizin surface \
-        (including the debugger and shell escapes), so use with care."
+        (including the debugger and shell escapes), so use with care.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn command(
         &self,
@@ -685,7 +728,13 @@ impl RizinServer {
     /// Run a raw Rizin command expecting JSON and return parsed output.
     #[tool(
         description = "Run a raw Rizin command that produces JSON (usually with a 'j' \
-        suffix, e.g. 'pdfj', 'aflj') and return the parsed JSON."
+        suffix, e.g. 'pdfj', 'aflj') and return the parsed JSON.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn command_json(
         &self,
@@ -700,14 +749,18 @@ impl RizinServer {
 
     /// Binary metadata (`ij`).
     #[tool(
-        description = "Binary information: format, architecture, bits, endianness, entry, etc. (ij)."
+        description = "Binary information: format, architecture, bits, endianness, entry, etc. (ij).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn binary_info(&self) -> Result<CallToolResult, ErrorData> {
         Ok(self.json_result(self.manager.cmdj("ij").await.mcp()?))
     }
 
     /// Entry points (`iej`).
-    #[tool(description = "List program entry points (iej).")]
+    #[tool(
+        description = "List program entry points (iej).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn entrypoints(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -716,7 +769,10 @@ impl RizinServer {
     }
 
     /// Sections (`iSj`).
-    #[tool(description = "List binary sections with addresses, sizes and permissions (iSj).")]
+    #[tool(
+        description = "List binary sections with addresses, sizes and permissions (iSj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn sections(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -725,7 +781,10 @@ impl RizinServer {
     }
 
     /// Segments (`iSSj`).
-    #[tool(description = "List binary segments (iSSj).")]
+    #[tool(
+        description = "List binary segments (iSSj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn segments(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -734,7 +793,10 @@ impl RizinServer {
     }
 
     /// Relocations (`irj`).
-    #[tool(description = "List relocations (irj).")]
+    #[tool(
+        description = "List relocations (irj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn relocations(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -743,7 +805,10 @@ impl RizinServer {
     }
 
     /// Imports (`iij`).
-    #[tool(description = "List imported symbols (iij).")]
+    #[tool(
+        description = "List imported symbols (iij).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn imports(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -752,7 +817,10 @@ impl RizinServer {
     }
 
     /// Exports (`iEj`).
-    #[tool(description = "List exported symbols (iEj).")]
+    #[tool(
+        description = "List exported symbols (iEj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn exports(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -761,7 +829,10 @@ impl RizinServer {
     }
 
     /// Symbols (`isj`).
-    #[tool(description = "List all symbols (isj).")]
+    #[tool(
+        description = "List all symbols (isj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn symbols(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -770,7 +841,10 @@ impl RizinServer {
     }
 
     /// Linked libraries (`ilj`).
-    #[tool(description = "List linked/required libraries (ilj).")]
+    #[tool(
+        description = "List linked/required libraries (ilj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn libraries(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -779,7 +853,10 @@ impl RizinServer {
     }
 
     /// Classes (`icj`).
-    #[tool(description = "List classes/methods recovered from the binary (icj).")]
+    #[tool(
+        description = "List classes/methods recovered from the binary (icj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn classes(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -790,7 +867,8 @@ impl RizinServer {
     /// Strings (`izzj`/`izj`).
     #[tool(
         description = "List strings. By default scans the whole file (izz); set all=false \
-        to scan only data sections (iz)."
+        to scan only data sections (iz).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_strings(
         &self,
@@ -803,7 +881,8 @@ impl RizinServer {
     /// Flags (`fj`), optionally restricted to one flag space.
     #[tool(
         description = "List flags (named addresses). Optionally restrict to a single flag \
-        space (e.g. symbols, strings, imports)."
+        space (e.g. symbols, strings, imports).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_flags(
         &self,
@@ -835,7 +914,10 @@ impl RizinServer {
     }
 
     /// Flag spaces (`fslj`).
-    #[tool(description = "List flag spaces and their flag counts (fslj).")]
+    #[tool(
+        description = "List flag spaces and their flag counts (fslj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn flag_spaces(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -846,7 +928,10 @@ impl RizinServer {
     // --- Analysis / functions --------------------------------------------
 
     /// Function list (`aflj`).
-    #[tool(description = "List analyzed functions with addresses, sizes and names (aflj).")]
+    #[tool(
+        description = "List analyzed functions with addresses, sizes and names (aflj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn list_functions(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -860,7 +945,8 @@ impl RizinServer {
         address, size, blocks, signature, callers, callees, the strings it references, and \
         the start of its decompilation (best engine available). `max_items` caps each list \
         (default 20) and `snippet_lines` the decompilation (default 30); totals say what \
-        was left out."
+        was left out.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn function_summary(
         &self,
@@ -978,7 +1064,8 @@ impl RizinServer {
     /// Function info (`afij`).
     #[tool(
         description = "Detailed info for the function at a location: bounds, stack frame, \
-        calling convention, callers/callees, etc. (afij)."
+        calling convention, callers/callees, etc. (afij).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn function_info(
         &self,
@@ -990,7 +1077,8 @@ impl RizinServer {
 
     /// Function variables (`afvlj`).
     #[tool(
-        description = "List local variables and arguments of the function at a location (afvlj)."
+        description = "List local variables and arguments of the function at a location (afvlj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn function_variables(
         &self,
@@ -1003,7 +1091,13 @@ impl RizinServer {
     /// Analyze a single function (`af`) and return its info.
     #[tool(
         description = "Analyze (or re-analyze) the function at a location, then return its \
-        info (af; afij)."
+        info (af; afij).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn analyze_function(
         &self,
@@ -1016,7 +1110,8 @@ impl RizinServer {
 
     /// Cross-references to an address (`axtj`).
     #[tool(
-        description = "List cross-references TO an address or flag/symbol (who references it) (axtj)."
+        description = "List cross-references TO an address or flag/symbol (who references it) (axtj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn xrefs_to(
         &self,
@@ -1031,7 +1126,8 @@ impl RizinServer {
 
     /// Cross-references from an address (`axfj`).
     #[tool(
-        description = "List cross-references FROM an address or flag/symbol (what it references) (axfj)."
+        description = "List cross-references FROM an address or flag/symbol (what it references) (axfj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn xrefs_from(
         &self,
@@ -1046,7 +1142,8 @@ impl RizinServer {
 
     /// Function control-flow graph (`agf j`).
     #[tool(
-        description = "Control-flow graph of the function at a location, as JSON nodes/edges (agf j)."
+        description = "Control-flow graph of the function at a location, as JSON nodes/edges (agf j).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn function_graph(
         &self,
@@ -1061,7 +1158,8 @@ impl RizinServer {
     /// Disassemble N instructions (`pdj`).
     #[tool(
         description = "Disassemble a number of instructions at a location (default 32) as \
-        structured JSON (pdj)."
+        structured JSON (pdj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn disassemble(
         &self,
@@ -1081,7 +1179,8 @@ impl RizinServer {
     #[tool(
         description = "Disassemble the function at a location as structured JSON (pdfj). \
         Its instructions (`ops`) are paged with offset/limit like a listing; the page \
-        details are in `ops_page`."
+        details are in `ops_page`.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn disassemble_function(
         &self,
@@ -1110,7 +1209,8 @@ impl RizinServer {
         pseudo-disassembly of the function's basic blocks (pdr); or force `ghidra`, `jsdec`, \
         or `pseudo`. rz-ghidra and jsdec are \
         optional plugins; see `decompilers` for what is installed. The engine actually used is \
-        reported in structuredContent."
+        reported in structuredContent.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn decompile(
         &self,
@@ -1125,7 +1225,8 @@ impl RizinServer {
     /// Report which decompiler engines are available (`Lcj`).
     #[tool(
         description = "Report which decompiler engines are installed: `ghidra` (rz-ghidra), \
-        `jsdec`, and `pseudo` (built-in, always true). Detected from the loaded core plugins."
+        `jsdec`, and `pseudo` (built-in, always true). Detected from the loaded core plugins.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn decompilers(&self) -> Result<CallToolResult, ErrorData> {
         let plugins = self.cmdj_optional("Lcj", json!([])).await?;
@@ -1147,7 +1248,8 @@ impl RizinServer {
 
     /// Hexdump (`pxj`).
     #[tool(
-        description = "Hexdump bytes at a location (default 64 bytes) as structured JSON (pxj)."
+        description = "Hexdump bytes at a location (default 64 bytes) as structured JSON (pxj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn hexdump(
         &self,
@@ -1166,7 +1268,8 @@ impl RizinServer {
     /// Read raw bytes (`p8`).
     #[tool(
         description = "Read raw bytes at a location (default 64) and return them encoded as \
-        hex (default) or base64."
+        hex (default) or base64.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn read_bytes(
         &self,
@@ -1202,7 +1305,8 @@ impl RizinServer {
     /// Per-instruction analysis (`aoj`).
     #[tool(
         description = "Analyze instructions at a location (default 1): opcode type, ESIL, \
-        operands, jump/fail targets, etc. (aoj)."
+        operands, jump/fail targets, etc. (aoj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn instruction_analysis(
         &self,
@@ -1223,7 +1327,8 @@ impl RizinServer {
     /// Search for a string (`/xj` of its bytes).
     #[tool(
         description = "Search the whole address space for a string (matched as raw bytes). \
-        Returns match addresses (/xj)."
+        Returns match addresses (/xj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_string(
         &self,
@@ -1246,7 +1351,8 @@ impl RizinServer {
     /// Search for a byte pattern (`/xj`).
     #[tool(
         description = "Search the whole address space for a hex byte pattern (e.g. '90 90' \
-        or 'deadbeef'). Returns match addresses (/xj)."
+        or 'deadbeef'). Returns match addresses (/xj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_bytes(
         &self,
@@ -1265,7 +1371,13 @@ impl RizinServer {
     /// Rename a function (`afn`).
     #[tool(
         description = "Rename the function containing a location; returns the name Rizin \
-        stored. Changes the analysis only, not the file. Requires --allow-write (afn)."
+        stored. Changes the analysis only, not the file. Requires --allow-write (afn).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn rename_function(
         &self,
@@ -1286,7 +1398,13 @@ impl RizinServer {
     /// Rename a function argument or local variable (`afvn`).
     #[tool(
         description = "Rename an argument or local variable of the function containing a \
-        location (see function_variables for the names). Requires --allow-write (afvn)."
+        location (see function_variables for the names). Requires --allow-write (afvn).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn rename_variable(
         &self,
@@ -1325,7 +1443,13 @@ impl RizinServer {
     #[tool(
         description = "Set the comment at an address (replacing any comment there, or \
         appending with append=true); returns the resulting comment. Requires --allow-write \
-        (CC)."
+        (CC).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn set_comment(
         &self,
@@ -1346,7 +1470,15 @@ impl RizinServer {
     }
 
     /// Remove a comment (`CC-`).
-    #[tool(description = "Remove the comment at an address. Requires --allow-write (CC-).")]
+    #[tool(
+        description = "Remove the comment at an address. Requires --allow-write (CC-).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn remove_comment(
         &self,
         Parameters(p): Parameters<AddressParams>,
@@ -1360,7 +1492,13 @@ impl RizinServer {
     /// Create or move a flag (`f+`).
     #[tool(
         description = "Name an address with a flag (creating it, or moving an existing flag of \
-        that name), usable as a location afterwards. Requires --allow-write (f+)."
+        that name), usable as a location afterwards. Requires --allow-write (f+).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn set_flag(
         &self,
@@ -1379,7 +1517,15 @@ impl RizinServer {
     }
 
     /// Remove a flag (`f-`).
-    #[tool(description = "Remove a flag by name. Requires --allow-write (f-).")]
+    #[tool(
+        description = "Remove a flag by name. Requires --allow-write (f-).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
     async fn remove_flag(
         &self,
         Parameters(p): Parameters<FlagNameParams>,
@@ -1396,7 +1542,13 @@ impl RizinServer {
     #[tool(
         description = "Set the C prototype of the function containing a location, typing its \
         arguments and return value (e.g. 'int parse_args(int argc, char **argv)'); returns \
-        the resulting signature. Requires --allow-write (afs)."
+        the resulting signature. Requires --allow-write (afs).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn set_function_signature(
         &self,
@@ -1416,7 +1568,8 @@ impl RizinServer {
         description = "Export the renames, comments, flags, signatures and byte writes made \
         through the tools since the file was opened, as a Rizin script (also after \
         close_file). Replay it with `. <script>` in Rizin (or the command tool) on the same \
-        binary to restore that work."
+        binary to restore that work.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn export_annotations(&self) -> Result<CallToolResult, ErrorData> {
         let (file, commands) = self.manager.journal().await;
@@ -1439,7 +1592,13 @@ impl RizinServer {
     #[tool(
         description = "Save the session (analysis, names, comments, flags, types) as a Rizin \
         project file (.rzdb), to reopen later with `rizin -p <file>`. Requires --allow-write \
-        (it writes a file to disk) (Ps)."
+        (it writes a file to disk) (Ps).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn save_project(
         &self,
@@ -1466,7 +1625,13 @@ impl RizinServer {
     /// Write hex bytes (`wx`).
     #[tool(
         description = "Write raw hex bytes at an address (requires --allow-write and a file \
-        opened with write=true)."
+        opened with write=true).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn write_hex(
         &self,
@@ -1482,7 +1647,13 @@ impl RizinServer {
     /// Write a string (`wx` of its bytes).
     #[tool(
         description = "Write a UTF-8 string (as raw bytes) at an address (requires \
-        --allow-write and a file opened with write=true)."
+        --allow-write and a file opened with write=true).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn write_string(
         &self,
@@ -1505,7 +1676,13 @@ impl RizinServer {
     #[tool(
         description = "Assemble one or more instructions (separated by ';' or newlines) for \
         the destination address and write the bytes there; returns the bytes written. \
-        Requires --allow-write and a file opened with write=true (pa; wx)."
+        Requires --allow-write and a file opened with write=true (pa; wx).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn write_assembly(
         &self,
@@ -1550,7 +1727,8 @@ impl RizinServer {
     /// Compute a digest/checksum/entropy over a region (`ph`).
     #[tool(
         description = "Compute a hash/checksum/entropy (e.g. md5, sha256, crc32, entropy) over \
-        a region at a location. `size` defaults to the current block size (ph)."
+        a region at a location. `size` defaults to the current block size (ph).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn hash(
         &self,
@@ -1583,7 +1761,10 @@ impl RizinServer {
     }
 
     /// List supported hash algorithms (`phlj`).
-    #[tool(description = "List all supported hash/checksum algorithms with descriptions (phlj).")]
+    #[tool(
+        description = "List all supported hash/checksum algorithms with descriptions (phlj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn hash_algorithms(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -1596,14 +1777,18 @@ impl RizinServer {
     /// Structured header fields (`iHj`).
     #[tool(
         description = "Show the binary's structured header fields (ELF/PE/Mach-O header), as \
-        JSON (iHj)."
+        JSON (iHj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn headers(&self) -> Result<CallToolResult, ErrorData> {
         Ok(self.json_result(self.manager.cmdj("iHj").await.mcp()?))
     }
 
     /// Header field summary (`ihj`).
-    #[tool(description = "Show a summary of binary header fields as JSON (ihj).")]
+    #[tool(
+        description = "Show a summary of binary header fields as JSON (ihj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn header_fields(&self) -> Result<CallToolResult, ErrorData> {
         Ok(self.json_result(self.cmdj_optional("ihj", json!(null)).await?))
     }
@@ -1611,20 +1796,27 @@ impl RizinServer {
     /// Code-signing / entitlements (`iCj`).
     #[tool(
         description = "Show code-signing / signature info such as entitlements. Null when the \
-        binary is unsigned or the format has no such data (iCj)."
+        binary is unsigned or the format has no such data (iCj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn signature_info(&self) -> Result<CallToolResult, ErrorData> {
         Ok(self.json_result(self.cmdj_optional("iCj", json!(null)).await?))
     }
 
     /// File version info (`iVj`).
-    #[tool(description = "Show file version information. Null when not present (iVj).")]
+    #[tool(
+        description = "Show file version information. Null when not present (iVj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn version_info(&self) -> Result<CallToolResult, ErrorData> {
         Ok(self.json_result(self.cmdj_optional("iVj", json!(null)).await?))
     }
 
     /// Embedded resources (`iRj`).
-    #[tool(description = "List embedded resources. Empty when not present (iRj).")]
+    #[tool(
+        description = "List embedded resources. Empty when not present (iRj).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn resources(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -1637,7 +1829,8 @@ impl RizinServer {
     /// Function C signature (`afsj`).
     #[tool(
         description = "Get the function's C signature at a location: return type, calling \
-        convention, and typed arguments (afsj)."
+        convention, and typed arguments (afsj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn function_signature(
         &self,
@@ -1652,7 +1845,8 @@ impl RizinServer {
         description = "Get the function's signature bytes, byte mask, and search mask at a \
         location — the masked byte pattern that identifies the function regardless of relocated \
         operands. (For actual FLIRT signature creation/application, see the flirt_* tools.) \
-        (afsbj)."
+        (afsbj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn function_signature_bytes(
         &self,
@@ -1667,7 +1861,8 @@ impl RizinServer {
     /// List signatures in the sigdb (`Fl`).
     #[tool(
         description = "List the FLIRT signatures available in Rizin's signature database \
-        (sigdb), with their architecture, module count, and description (Fl)."
+        (sigdb), with their architecture, module count, and description (Fl).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn flirt_list(&self) -> Result<CallToolResult, ErrorData> {
         let out = self.manager.cmd("Fl").await.mcp()?;
@@ -1683,7 +1878,13 @@ impl RizinServer {
         description = "Apply FLIRT signatures from Rizin's signature database (sigdb) to the \
         loaded binary, naming matched library functions. An optional filter narrows which \
         signature files are tried. Returns the number of matched functions and the files \
-        applied (Fa)."
+        applied (Fa).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn flirt_apply_sigdb(
         &self,
@@ -1712,7 +1913,13 @@ impl RizinServer {
     #[tool(
         description = "Open a FLIRT signature file (.sig or .pat; a glob is accepted) and apply \
         its signatures to the loaded binary, naming matched functions. Returns the number of \
-        matched functions (Fs)."
+        matched functions (Fs).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn flirt_apply(
         &self,
@@ -1757,7 +1964,8 @@ impl RizinServer {
     /// Dump a FLIRT signature file (`Fd`).
     #[tool(
         description = "Open a FLIRT signature file (.sig or .pat) and dump its contents \
-        (format, version, architecture, and the per-module byte patterns) (Fd)."
+        (format, version, architecture, and the per-module byte patterns) (Fd).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn flirt_dump(
         &self,
@@ -1778,7 +1986,13 @@ impl RizinServer {
     /// Create a FLIRT signature file (`Fc`, write).
     #[tool(
         description = "Create a FLIRT signature file (.sig or .pat) from the current analysis, \
-        writing it to the given path. Requires --allow-write (it writes a file to disk) (Fc)."
+        writing it to the given path. Requires --allow-write (it writes a file to disk) (Fc).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn flirt_create(
         &self,
@@ -1809,7 +2023,13 @@ impl RizinServer {
     #[tool(
         description = "Fetch symbols and hints from a configured Rizin Silhouette server and \
         apply them to the open binary. Requires the rz-silhouette plugin and `silhouette.*` \
-        configuration (host/port/psk), e.g. set via the `command` tool or a .rizinrc (sil)."
+        configuration (host/port/psk), e.g. set via the `command` tool or a .rizinrc (sil).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn silhouette(&self) -> Result<CallToolResult, ErrorData> {
         const HINT: &str = "no output from `sil`. Ensure the rz-silhouette plugin is \
@@ -1829,7 +2049,8 @@ impl RizinServer {
     #[tool(
         description = "Test connectivity and credentials against the configured Rizin \
         Silhouette server. Requires the rz-silhouette plugin and `silhouette.*` configuration \
-        (sil test)."
+        (sil test).",
+        annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn silhouette_test(&self) -> Result<CallToolResult, ErrorData> {
         const HINT: &str = "no output from `sil test`. Ensure the rz-silhouette plugin is \
@@ -1850,7 +2071,8 @@ impl RizinServer {
     /// RzIL listing of a function (`plf`).
     #[tool(
         description = "Print the RzIL (Rizin Intermediate Language) lifting of the function at \
-        a location, instruction by instruction (plf)."
+        a location, instruction by instruction (plf).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn il_function(
         &self,
@@ -1889,7 +2111,13 @@ impl RizinServer {
     #[tool(
         description = "Emulate instructions in the RzIL virtual machine starting at a location, \
         stepping `steps` instructions (default 1). Returns the VM read/write changes per step \
-        (register/PC/memory writes) as JSON (aezi; aezsej)."
+        (register/PC/memory writes) as JSON (aezi; aezsej).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn emulate_il(
         &self,
@@ -1910,7 +2138,8 @@ impl RizinServer {
     /// Compare bytes at a location with a hex pattern (`cxj`).
     #[tool(
         description = "Compare the bytes at a location against a hex pattern; returns the \
-        differing offsets and values (cxj)."
+        differing offsets and values (cxj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn compare_bytes(
         &self,
@@ -1932,7 +2161,8 @@ impl RizinServer {
     #[tool(
         description = "Compare the bytes at a location against the contents of another file on \
         disk; returns the differing offsets and values (cfj). Useful for byte-level diffing of \
-        two binaries."
+        two binaries.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn compare_file(
         &self,
@@ -1955,7 +2185,8 @@ impl RizinServer {
     #[tool(
         description = "Search the whole address space for an integer value of a given width \
         (1/2/4/8 bytes, default 4). Value may be decimal or 0x-hex. Returns match addresses \
-        (/vNj)."
+        (/vNj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_value(
         &self,
@@ -1987,7 +2218,8 @@ impl RizinServer {
         instructions (e.g. 'pop rdi; ret'), matched in order, each as a substring of an \
         instruction; other instructions may sit in between. Set exact=true to only get \
         gadgets made of exactly those instructions. Returns the gadgets with their \
-        instructions and addresses (/Rj)."
+        instructions and addresses (/Rj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_rop(
         &self,
@@ -2013,7 +2245,8 @@ impl RizinServer {
     #[tool(
         description = "Scan the address space for magic/file-format signatures (embedded files, \
         headers, known constants) and return their locations. Requires Rizin's magic database \
-        in its data dir; empty when unavailable (/mj)."
+        in its data dir; empty when unavailable (/mj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_magic(
         &self,
@@ -2025,7 +2258,8 @@ impl RizinServer {
     /// Search for cryptographic material (`/cmj`).
     #[tool(
         description = "Scan for cryptographic material (e.g. AES key schedules, known crypto \
-        constants) and return their locations. Empty when none found (/cmj)."
+        constants) and return their locations. Empty when none found (/cmj).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_crypto(
         &self,
@@ -2040,7 +2274,13 @@ impl RizinServer {
     #[tool(
         description = "Start a debug session by (re)launching the currently open file under the \
         debugger, stopped at its entry point. Requires --allow-debug. WARNING: this executes \
-        the target binary (ood)."
+        the target binary (ood).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn debug_start(&self) -> Result<CallToolResult, ErrorData> {
         self.ensure_debug().await?;
@@ -2053,7 +2293,15 @@ impl RizinServer {
     }
 
     /// Stop the debug session (`doc`).
-    #[tool(description = "Close the current debug session, killing the debuggee (doc).")]
+    #[tool(
+        description = "Close the current debug session, killing the debuggee (doc).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
     async fn debug_stop(&self) -> Result<CallToolResult, ErrorData> {
         self.ensure_debug().await?;
         let out = self.manager.cmd("doc").await.mcp()?;
@@ -2067,7 +2315,13 @@ impl RizinServer {
     /// Continue execution (`dc`).
     #[tool(
         description = "Continue execution of the debuggee until it stops (breakpoint, signal, or \
-        exit). Requires an active debug session (dc)."
+        exit). Requires an active debug session (dc).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn debug_continue(&self) -> Result<CallToolResult, ErrorData> {
         self.ensure_debug().await?;
@@ -2082,7 +2336,13 @@ impl RizinServer {
     /// Step instructions (`ds`).
     #[tool(
         description = "Single-step the debuggee `count` instructions (default 1). Requires an \
-        active debug session (ds)."
+        active debug session (ds).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn debug_step(
         &self,
@@ -2101,7 +2361,8 @@ impl RizinServer {
     /// Read debug registers (`drj`).
     #[tool(
         description = "Read the debuggee's CPU register values as JSON. Requires an active \
-        debug session (drj)."
+        debug session (drj).",
+        annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn debug_registers(&self) -> Result<CallToolResult, ErrorData> {
         self.ensure_debug().await?;
@@ -2111,7 +2372,13 @@ impl RizinServer {
     /// Set a breakpoint (`db @ addr`).
     #[tool(
         description = "Set a breakpoint at an address or flag/symbol. Requires an active debug \
-        session (db)."
+        session (db).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn debug_breakpoint(
         &self,
@@ -2126,7 +2393,13 @@ impl RizinServer {
     /// Remove a breakpoint (`db- @ addr`).
     #[tool(
         description = "Remove the breakpoint at an address or flag/symbol. Requires an active \
-        debug session (db-)."
+        debug session (db-).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn debug_breakpoint_remove(
         &self,
@@ -2139,7 +2412,10 @@ impl RizinServer {
     }
 
     /// List breakpoints (`dblj`).
-    #[tool(description = "List all breakpoints as JSON. Requires an active debug session (dblj).")]
+    #[tool(
+        description = "List all breakpoints as JSON. Requires an active debug session (dblj).",
+        annotations(read_only_hint = true, open_world_hint = true)
+    )]
     async fn debug_breakpoints(
         &self,
         Parameters(p): Parameters<PageParams>,
@@ -2151,7 +2427,8 @@ impl RizinServer {
     /// Backtrace (`dbtj`).
     #[tool(
         description = "Show the call-stack backtrace of the debuggee as JSON. Requires an active \
-        debug session (dbtj)."
+        debug session (dbtj).",
+        annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn debug_backtrace(
         &self,
@@ -2164,7 +2441,8 @@ impl RizinServer {
     /// Memory maps (`dmj`).
     #[tool(
         description = "List the debuggee's memory maps (regions, permissions, names) as JSON. \
-        Requires an active debug session (dmj)."
+        Requires an active debug session (dmj).",
+        annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn debug_maps(
         &self,
@@ -2177,7 +2455,8 @@ impl RizinServer {
     /// Debuggee status (`dij`).
     #[tool(
         description = "Report the debuggee's status as JSON (PID, stop reason, signal, current \
-        PC, etc.). Requires an active debug session (dij)."
+        PC, etc.). Requires an active debug session (dij).",
+        annotations(read_only_hint = true, open_world_hint = true)
     )]
     async fn debug_status(&self) -> Result<CallToolResult, ErrorData> {
         self.ensure_debug().await?;
@@ -2577,6 +2856,36 @@ mod tests {
                 .iter()
                 .any(|n| n == "write_hex" || n == "debug_start")
         );
+    }
+
+    #[test]
+    fn every_tool_carries_safety_hints() {
+        for t in RizinServer::tool_router().list_all() {
+            let name = t.name.as_ref();
+            let a = t
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} has no annotations"));
+            let read_only = a
+                .read_only_hint
+                .unwrap_or_else(|| panic!("{name}: readOnlyHint"));
+            assert!(a.open_world_hint.is_some(), "{name}: openWorldHint");
+            if !read_only {
+                assert!(a.destructive_hint.is_some(), "{name}: destructiveHint");
+                assert!(a.idempotent_hint.is_some(), "{name}: idempotentHint");
+            }
+            // Whatever is gated changes something, except debugger queries.
+            let gated = RAW_TOOLS.contains(&name)
+                || WRITE_TOOLS.contains(&name)
+                || ANNOTATION_TOOLS.contains(&name);
+            assert!(!(gated && read_only), "{name} is gated but read-only");
+            if RAW_TOOLS.contains(&name) || DEBUG_TOOLS.contains(&name) {
+                assert_eq!(a.open_world_hint, Some(true), "{name}: open world");
+            }
+            if WRITE_TOOLS.contains(&name) || RAW_TOOLS.contains(&name) {
+                assert_eq!(a.destructive_hint, Some(true), "{name}: destructive");
+            }
+        }
     }
 
     #[test]
