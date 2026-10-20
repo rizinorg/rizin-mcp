@@ -223,6 +223,19 @@ Install them with Rizin's package manager (`rz-pm install rz-ghidra jsdec
 rz-silhouette`) or from source; nothing in this server needs rebuilding. Run
 `decompilers` to confirm which decompiler engines are visible.
 
+What each optional component enables, and how to get it:
+
+| Component | Tools | Default source install | How to get it |
+|---|---|---|---|
+| rz-ghidra | `decompile` (`ghidra`) | not installed | `rz-pm install rz-ghidra` |
+| jsdec | `decompile` (`jsdec`) | not installed | `rz-pm install jsdec` |
+| rz-silhouette | `silhouette*` | not installed | `rz-pm install rz-silhouette`, then `silhouette.*` settings |
+| sigdb | `flirt_list`, `flirt_apply_sigdb` | **empty** (`install_sigdb=false`) | build Rizin with `-Dinstall_sigdb=true`, or clone [rizinorg/sigdb](https://github.com/rizinorg/sigdb) and pass `--sigdb <dir>` |
+| magic database | `search_magic` | installed | part of Rizin's data dir |
+
+`decompilers` and `flirt_list` say which of these are missing and how to add
+them (`hint`), instead of just returning nothing.
+
 ## Requirements
 
 - Rust 1.87+ (2024 edition) to build, and a C compiler for the `api`
@@ -323,6 +336,7 @@ rizin-mcp [FILE] [OPTIONS]
   --startup-timeout <SECS>    Startup/analysis timeout (default: 60)
   --max-output-bytes <BYTES>  Maximum size of one tool result (default: 131072)
   --default-limit <N>         Items per listing page without a `limit` (default: 100)
+  --sigdb <DIR>               Extra FLIRT signature database (e.g. a clone of rizinorg/sigdb)
 ```
 
 Logging goes to **stderr** (stdout is the protocol channel). Control verbosity
@@ -378,6 +392,8 @@ cargo test                       # unit + property tests, and integration tests
 
 # Integration tests also cover the pipe backend when a rizin binary is given:
 RIZIN_MCP_TEST_BINARY=/path/to/rizin cargo test --test integration
+# The --sigdb tests need a clone of https://github.com/rizinorg/sigdb:
+RIZIN_MCP_TEST_SIGDB=/path/to/sigdb cargo test --test tools
 
 # Pipe-only build (no Rizin libraries required to compile):
 cargo clippy --no-default-features --all-targets -- -D warnings

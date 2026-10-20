@@ -64,6 +64,11 @@ struct Cli {
     /// Number of items a listing returns when the client gives no `limit`.
     #[arg(long, default_value_t = 100)]
     default_limit: usize,
+
+    /// Extra FLIRT signature database directory (e.g. a clone of
+    /// rizinorg/sigdb), for when Rizin was installed without its sigdb.
+    #[arg(long, value_name = "DIR")]
+    sigdb: Option<String>,
 }
 
 /// Clap-facing mirror of [`AnalysisLevel`].
@@ -131,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
         command_timeout: Duration::from_secs(cli.command_timeout),
         max_output_bytes: cli.max_output_bytes,
         default_limit: cli.default_limit.max(1),
+        sigdb_path: cli.sigdb.clone(),
         ..Default::default()
     };
 

@@ -971,3 +971,69 @@ async fn samples_can_be_sent_as_data() {
         assert_eq!(err.code.0, -32602, "{t:?}");
     }
 }
+
+#[tokio::test]
+async fn optional_components_explain_themselves() {
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+        // Without a sigdb, the listing says how to get one.
+        let list = s.ok("flirt_list", json!({})).await;
+        if list["total"] == 0 {
+            assert!(
+                list["hint"].as_str().unwrap().contains("install_sigdb"),
+                "{t:?}: {list}"
+            );
+        }
+        let d = s.ok("decompilers", json!({})).await;
+        assert_eq!(d["pseudo"], true);
+        if d["ghidra"] == false || d["jsdec"] == false {
+            assert!(d["hint"].as_str().unwrap().contains("rz-pm"), "{t:?}: {d}");
+            assert!(!d["plugin_dir"].as_str().unwrap().is_empty(), "{t:?}");
+        }
+    }
+
+    // A sigdb given with --sigdb is used (RIZIN_MCP_TEST_SIGDB: a clone of
+    // rizinorg/sigdb).
+    let Ok(sigdb) = std::env::var("RIZIN_MCP_TEST_SIGDB") else {
+        eprintln!("skipping the --sigdb part: RIZIN_MCP_TEST_SIGDB is not set");
+        return;
+    };
+    for t in transports() {
+        let s = Session::start(t, |c| c.sigdb_path = Some(sigdb.clone())).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+        let list = s
+            .call("flirt_list", json!({ "limit": 5 }))
+            .await
+            .expect("flirt_list");
+        match list.structured_content {
+            Some(sc) => {
+                assert!(sc["total"].as_u64().unwrap() > 0, "{t:?}: {sc}");
+                assert!(sc.get("hint").is_none());
+            }
+            // Before Rizin 0.10: the `Fl` table.
+            None => {
+                let text = &list.content[0].as_text().unwrap().text;
+                assert!(text.contains("fedora-zlib"), "{t:?}: {text}");
+            }
+        }
+        let applied = s
+            .ok(
+                "flirt_apply_sigdb",
+                json!({ "filter": "elf/x86/64/fedora-zlib" }),
+            )
+            .await;
+        assert_eq!(
+            applied["signature_files"][0], "elf/x86/64/fedora-zlib.sig",
+            "{t:?}: {applied}"
+        );
+    }
+}

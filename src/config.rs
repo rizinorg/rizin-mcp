@@ -55,6 +55,9 @@ pub struct ServerConfig {
     pub max_output_bytes: usize,
     /// Number of items a listing returns when the caller gives no `limit`.
     pub default_limit: usize,
+    /// An extra FLIRT signature database directory (Rizin's
+    /// `flirt.sigdb.path`), e.g. a clone of rizinorg/sigdb.
+    pub sigdb_path: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -71,6 +74,7 @@ impl Default for ServerConfig {
             max_count: 100_000,
             max_output_bytes: 128 << 10, // 128 KiB, roughly 32k tokens
             default_limit: 100,
+            sigdb_path: None,
         }
     }
 }
