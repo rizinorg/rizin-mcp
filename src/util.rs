@@ -132,6 +132,86 @@ pub fn validate_path(path: &str) -> Result<String, RizinError> {
     Ok(path.to_string())
 }
 
+/// Collapse runs of whitespace into single spaces and trim.
+fn collapse_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Quote `arg` as one double-quoted Rizin shell argument.
+///
+/// Inside double quotes Rizin still expands `$(...)` and backticks and treats
+/// `\` and `"` specially; all four are backslash-escaped, so any other text,
+/// including `;`, `@`, `|`, `>` and `~`, reaches the command verbatim.
+///
+/// # Errors
+/// Returns [`RizinError::InvalidArgument`] for control characters, which the
+/// shell drops or treats as line ends.
+pub fn quote_arg(arg: &str) -> Result<String, RizinError> {
+    if arg.chars().any(char::is_control) {
+        return Err(RizinError::InvalidArgument {
+            arg: arg.to_string(),
+            reason: "control characters are not allowed".into(),
+        });
+    }
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    for c in arg.chars() {
+        if matches!(c, '\\' | '"' | '$' | '`') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    Ok(quoted)
+}
+
+/// Split a ROP gadget query into its `;`-separated instructions, trimmed and
+/// with whitespace collapsed; empty fields (e.g. a trailing `;`) are dropped.
+///
+/// Rizin's `/R` filter matches the fields in order against the gadget's
+/// instructions, but neither trims them (so `pop rdi; ret` looks for " ret")
+/// nor survives an unquoted `;`, which its shell splits into a second command.
+/// Callers re-join the fields without spaces and pass them through
+/// [`quote_arg`].
+///
+/// # Errors
+/// Returns [`RizinError::InvalidArgument`] for a query with no instruction or
+/// with a control character.
+pub fn parse_rop_query(query: &str) -> Result<Vec<String>, RizinError> {
+    if query.chars().any(char::is_control) {
+        return Err(RizinError::InvalidArgument {
+            arg: query.to_string(),
+            reason: "query contains a control character".into(),
+        });
+    }
+    let fields: Vec<String> = query
+        .split(';')
+        .map(collapse_whitespace)
+        .filter(|f| !f.is_empty())
+        .collect();
+    if fields.is_empty() {
+        return Err(RizinError::InvalidArgument {
+            arg: query.to_string(),
+            reason: "query must contain at least one instruction".into(),
+        });
+    }
+    Ok(fields)
+}
+
+/// Whether a `/Rj` gadget consists of exactly `fields`, in order: one
+/// instruction per field, each equal to it up to case and whitespace.
+pub fn gadget_matches_exactly(gadget: &serde_json::Value, fields: &[String]) -> bool {
+    let Some(ops) = gadget.get("opcodes").and_then(|o| o.as_array()) else {
+        return false;
+    };
+    ops.len() == fields.len()
+        && ops.iter().zip(fields).all(|(op, field)| {
+            op.get("opcode")
+                .and_then(|o| o.as_str())
+                .is_some_and(|o| collapse_whitespace(o).eq_ignore_ascii_case(field))
+        })
+}
+
 /// Parse a flexible hex byte string into raw bytes.
 ///
 /// Accepts optional surrounding whitespace, interior whitespace between bytes,
@@ -307,6 +387,44 @@ mod tests {
             prop_assert!(c <= max.max(1));
         }
 
+        // A valid query never yields a field that is empty, padded, or holds
+        // the `;` that separates fields.
+        #[test]
+        fn rop_fields_are_trimmed(q in "[ -~]{0,64}") {
+            if let Ok(fields) = parse_rop_query(&q) {
+                prop_assert!(!fields.is_empty());
+                for f in &fields {
+                    prop_assert!(!f.is_empty());
+                    prop_assert_eq!(f.trim(), f.as_str());
+                    prop_assert!(!f.contains(';'));
+                    prop_assert!(!f.contains("  "));
+                }
+            }
+        }
+
+        // A quoted argument is one double-quoted token: every special inside
+        // it is escaped, and removing the escapes gives the input back.
+        #[test]
+        fn quote_arg_round_trips(arg in "\\PC{0,64}") {
+            let q = quote_arg(&arg).unwrap();
+            prop_assert!(q.len() >= 2 && q.starts_with('"') && q.ends_with('"'));
+            let inner = &q[1..q.len() - 1];
+            let mut out = String::new();
+            let mut chars = inner.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => {
+                        let next = chars.next();
+                        prop_assert!(matches!(next, Some('\\' | '"' | '$' | '`')));
+                        out.extend(next);
+                    }
+                    '"' | '$' | '`' => prop_assert!(false, "unescaped {:?} in {}", c, q),
+                    c => out.push(c),
+                }
+            }
+            prop_assert_eq!(out, arg);
+        }
+
         // Any string built only from legal location chars validates and is
         // returned unchanged; appending a metacharacter makes it invalid.
         #[test]
@@ -332,6 +450,46 @@ mod tests {
         assert!(validate_number("12; px").is_err());
         assert!(validate_number("0x").is_err());
         assert!(validate_number("nope").is_err());
+    }
+
+    #[test]
+    fn rop_query_is_trimmed_and_split() {
+        assert_eq!(
+            parse_rop_query("pop rdi; ret").unwrap(),
+            vec!["pop rdi", "ret"]
+        );
+        assert_eq!(
+            parse_rop_query("  pop   rdi ;ret;  ").unwrap(),
+            vec!["pop rdi", "ret"]
+        );
+        assert_eq!(parse_rop_query("ret").unwrap(), vec!["ret"]);
+        for bad in ["", " ; ", "pop\nrdi", "pop\trdi"] {
+            assert!(parse_rop_query(bad).is_err(), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn quote_arg_escapes_shell_specials() {
+        assert_eq!(quote_arg("pop rdi;ret").unwrap(), "\"pop rdi;ret\"");
+        assert_eq!(
+            quote_arg(r#"a"b\c$(d)`e`"#).unwrap(),
+            r#""a\"b\\c\$(d)\`e\`""#
+        );
+        assert_eq!(quote_arg("").unwrap(), "\"\"");
+        assert!(quote_arg("a\nb").is_err());
+        assert!(quote_arg("a\tb").is_err());
+    }
+
+    #[test]
+    fn exact_gadget_match() {
+        let g = serde_json::json!({"opcodes": [
+            {"opcode": "pop rdi"}, {"opcode": "pop  rbp"}, {"opcode": "ret"}
+        ]});
+        let f = |q: &str| parse_rop_query(q).unwrap();
+        assert!(gadget_matches_exactly(&g, &f("pop rdi; POP RBP; ret")));
+        assert!(!gadget_matches_exactly(&g, &f("pop rdi; ret")));
+        assert!(!gadget_matches_exactly(&g, &f("pop rdi; pop rbp")));
+        assert!(!gadget_matches_exactly(&serde_json::json!({}), &f("ret")));
     }
 
     #[test]

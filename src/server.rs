@@ -23,8 +23,8 @@ use crate::params::*;
 use crate::session::{AnalysisLevel, SessionManager};
 use crate::status::CmdStatus;
 use crate::util::{
-    at_suffix, clamp_count, parse_hex_bytes, to_hex, validate_algo, validate_location,
-    validate_number, validate_path,
+    at_suffix, clamp_count, gadget_matches_exactly, parse_hex_bytes, parse_rop_query, quote_arg,
+    to_hex, validate_algo, validate_location, validate_number, validate_path,
 };
 
 /// Resources exposed by the server: `(uri, display name, rizin JSON command)`.
@@ -1153,34 +1153,30 @@ impl RizinServer {
 
     /// Search for ROP gadgets (`/Rj`).
     #[tool(
-        description = "Search for ROP gadgets matching one or more `;`-separated instructions \
-        (e.g. 'pop rdi; ret'). Returns matching gadget chains with addresses (/Rj)."
+        description = "Search for ROP gadgets containing one or more `;`-separated \
+        instructions (e.g. 'pop rdi; ret'), matched in order, each as a substring of an \
+        instruction; other instructions may sit in between. Set exact=true to only get \
+        gadgets made of exactly those instructions. Returns the gadgets with their \
+        instructions and addresses (/Rj)."
     )]
     async fn search_rop(
         &self,
         Parameters(p): Parameters<SearchRopParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        if p.query.trim().is_empty() {
-            return Err(RizinError::InvalidArgument {
-                arg: p.query.clone(),
-                reason: "query must not be empty".into(),
-            }
-            .to_error_data());
+        let fields = parse_rop_query(&p.query).mcp()?;
+        let filter = quote_arg(&fields.join(";")).mcp()?;
+        let gadgets = self.manager.cmdj(&format!("/Rj {filter}")).await.mcp()?;
+        if !p.exact.unwrap_or(false) {
+            return Ok(json_result(gadgets));
         }
-        // The gadget query legitimately uses `;`; reject only framing-breakers.
-        if p.query.contains(['\n', '\0', '|', '`', '>']) {
-            return Err(RizinError::InvalidArgument {
-                arg: p.query.clone(),
-                reason: "query contains a disallowed character".into(),
-            }
-            .to_error_data());
-        }
-        Ok(json_result(
-            self.manager
-                .cmdj(&format!("/Rj {}", p.query.trim()))
-                .await
-                .mcp()?,
-        ))
+        let exact: Vec<Value> = gadgets
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|g| gadget_matches_exactly(g, &fields))
+            .cloned()
+            .collect();
+        Ok(json_result(Value::Array(exact)))
     }
 
     /// Search for magic/file-format constants (`/mj`).
