@@ -47,6 +47,21 @@ to a text rendering, so clients can parse results directly. MCP requires
 `structuredContent` to be an object, so a listing comes as
 `{"items": [...]}` and a bare value as `{"result": ...}`.
 
+Results are bounded so a large binary cannot flood the client's context:
+
+- Listings (functions, strings, symbols, imports, flags, xrefs, searches,
+  diffs, …) take `offset` and `limit` (default 100 items) and return
+  `items`, `total`, `offset`, `returned`, and `truncated`; when more remain,
+  pass `next_offset` as the next `offset`. `disassemble_function` pages the
+  function's instructions the same way (`ops_page`).
+- No result exceeds `--max-output-bytes` (128 KiB by default): a page holds
+  fewer items when they are large, text such as raw `command` output is cut
+  with a notice, and an object that is still too large (e.g. the graph of a
+  huge function) is refused with a hint to narrow the request.
+
+Rizin itself has no pagination yet (rizinorg/rizin#6543, D1), so it still
+produces the full listing, which the server then slices.
+
 **Session**
 - `open_file` — open a binary/file or Rizin URI (`malloc://`, `hex://`, …) and run
   analysis; `-` opens a session with no file
@@ -277,6 +292,8 @@ rizin-mcp [FILE] [OPTIONS]
   --no-raw                    Disable the raw `command` / `command_json` tools
   --command-timeout <SECS>    Per-command timeout (default: 120)
   --startup-timeout <SECS>    Startup/analysis timeout (default: 60)
+  --max-output-bytes <BYTES>  Maximum size of one tool result (default: 131072)
+  --default-limit <N>         Items per listing page without a `limit` (default: 100)
 ```
 
 Logging goes to **stderr** (stdout is the protocol channel). Control verbosity

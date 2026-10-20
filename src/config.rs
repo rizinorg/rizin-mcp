@@ -49,6 +49,12 @@ pub struct ServerConfig {
     pub max_bytes: u64,
     /// Upper bound on instruction counts for disassembly-style commands.
     pub max_count: u64,
+    /// Upper bound on the size of one tool result, in bytes of serialized
+    /// output: listings are cut to what fits, text is truncated, and a larger
+    /// object is refused.
+    pub max_output_bytes: usize,
+    /// Number of items a listing returns when the caller gives no `limit`.
+    pub default_limit: usize,
 }
 
 impl Default for ServerConfig {
@@ -63,6 +69,8 @@ impl Default for ServerConfig {
             command_timeout: Duration::from_secs(120),
             max_bytes: 1 << 20, // 1 MiB
             max_count: 100_000,
+            max_output_bytes: 128 << 10, // 128 KiB, roughly 32k tokens
+            default_limit: 100,
         }
     }
 }
