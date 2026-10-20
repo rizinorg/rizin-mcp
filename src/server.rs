@@ -43,6 +43,11 @@ const RESOURCES: &[(&str, &str, &str)] = &[
     ("rizin://headers", "structured header fields (iHj)", "iHj"),
 ];
 
+/// Why the sigdb may be empty, and how to fill it.
+const SIGDB_HINT: &str = "The sigdb is empty: Rizin installs it only when built with \
+    `meson -Dinstall_sigdb=true`. Alternatively clone https://github.com/rizinorg/sigdb and \
+    start the server with `--sigdb <dir>` (Rizin's `flirt.sigdb.path`).";
+
 /// Human-readable usage instructions advertised to clients.
 const INSTRUCTIONS: &str = "\
 Drive the Rizin reverse-engineering framework. Start by calling `open_file` with \
@@ -1225,7 +1230,8 @@ impl RizinServer {
     /// Report which decompiler engines are available (`Lcj`).
     #[tool(
         description = "Report which decompiler engines are installed: `ghidra` (rz-ghidra), \
-        `jsdec`, and `pseudo` (built-in, always true). Detected from the loaded core plugins.",
+        `jsdec`, and `pseudo` (built-in, always true), detected from the loaded core \
+        plugins; when one is missing, `hint` says how to install it.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn decompilers(&self) -> Result<CallToolResult, ErrorData> {
@@ -1239,11 +1245,26 @@ impl RizinServer {
                 })
             })
         };
-        Ok(self.json_result(json!({
+        let mut result = json!({
             "ghidra": has("ghidra"),
             "jsdec": has("jsdec"),
             "pseudo": true,
-        })))
+        });
+        if !has("ghidra") || !has("jsdec") {
+            let dir = self
+                .manager
+                .cmd("e dir.plugins")
+                .await
+                .map(|d| d.trim().to_string())
+                .unwrap_or_default();
+            result["plugin_dir"] = json!(dir);
+            result["hint"] = json!(
+                "rz-ghidra (pdg) and jsdec (pdd) are separate plugins: install them with \
+                 `rz-pm install rz-ghidra jsdec`, or build them against this Rizin and put \
+                 them in `plugin_dir`; the server picks them up on the next open_file."
+            );
+        }
+        Ok(self.json_result(result))
     }
 
     /// Hexdump (`pxj`).
@@ -1858,19 +1879,53 @@ impl RizinServer {
 
     // --- FLIRT signatures -------------------------------------------------
 
-    /// List signatures in the sigdb (`Fl`).
+    /// List signatures in the sigdb (`Flj`).
     #[tool(
-        description = "List the FLIRT signatures available in Rizin's signature database \
-        (sigdb), with their architecture, module count, and description (Fl).",
+        description = "List the FLIRT signature files available in Rizin's signature database \
+        (sigdb), with their format, architecture, bits, module count, and description (a \
+        text table before Rizin 0.10). When it is empty, `hint` says how to install it (Flj).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn flirt_list(&self) -> Result<CallToolResult, ErrorData> {
-        let out = self.manager.cmd("Fl").await.mcp()?;
-        Ok(self.text_result(if out.trim().is_empty() {
-            "No FLIRT signatures found in the sigdb.".to_string()
-        } else {
-            out
-        }))
+    async fn flirt_list(
+        &self,
+        Parameters(p): Parameters<PageParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let empty = json!({ "items": [], "total": 0, "hint": SIGDB_HINT });
+        let sigdb = match self.manager.cmdj("Flj").await {
+            Ok(sigdb) => sigdb,
+            // `Fl` has no JSON mode before Rizin 0.10: return its table. (A
+            // pipe to such a Rizin cannot report the status: no output.)
+            Err(
+                RizinError::CommandFailed {
+                    status: CmdStatus::NonExistingCmd | CmdStatus::Failed,
+                    ..
+                }
+                | RizinError::EmptyJson { .. },
+            ) => {
+                let table = self.manager.cmd("Fl").await.mcp()?;
+                if table.trim().is_empty() {
+                    return Ok(self.json_result(empty));
+                }
+                return Ok(self.text_result(table));
+            }
+            Err(e) => return Err(e.to_error_data()),
+        };
+        if sigdb.as_array().is_some_and(Vec::is_empty) {
+            return Ok(self.json_result(empty));
+        }
+        Ok(self.listing(sigdb, &p))
+    }
+
+    /// Whether the sigdb holds no signature file.
+    async fn sigdb_is_empty(&self) -> bool {
+        match self.manager.cmdj("Flj").await {
+            Ok(v) => v.as_array().is_some_and(Vec::is_empty),
+            Err(_) => self
+                .manager
+                .cmd("Fl")
+                .await
+                .is_ok_and(|t| t.trim().is_empty()),
+        }
     }
 
     /// Apply signatures from the sigdb (`Fa`).
@@ -1902,11 +1957,16 @@ impl RizinServer {
         let files: Vec<&str> = out
             .lines()
             .filter_map(|l| l.strip_prefix("Applying "))
+            .map(|l| l.strip_suffix(" signature file").unwrap_or(l))
             .collect();
-        Ok(self.json_result(json!({
+        let mut result = json!({
             "matched_functions": applied,
             "signature_files": files,
-        })))
+        });
+        if applied == 0 && self.sigdb_is_empty().await {
+            result["hint"] = json!(SIGDB_HINT);
+        }
+        Ok(self.json_result(result))
     }
 
     /// Apply a FLIRT signature file (`Fs`).

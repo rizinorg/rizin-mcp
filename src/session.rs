@@ -266,6 +266,10 @@ impl SessionManager {
         self.close().await;
 
         let backend = self.spawn_backend(path, write).await?;
+        if let Some(dir) = &self.config.sigdb_path {
+            let cmd = format!("e flirt.sigdb.path={}", crate::util::quote_arg(dir)?);
+            check(&cmd, backend.exec(&cmd).await?)?;
+        }
 
         let mut analysis_error = None;
         if let Some(cmd) = analysis.command() {

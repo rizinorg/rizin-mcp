@@ -67,6 +67,10 @@ jobs:
           pc=$(dirname "$(find "$HOME/.local/rizin" -name rz_core.pc | head -1)")
           echo "PKG_CONFIG_PATH=$pc" >> "$GITHUB_ENV"
           echo "RIZIN_MCP_TEST_BINARY=$HOME/.local/rizin/bin/rizin" >> "$GITHUB_ENV"
+      - name: Fetch a sigdb for the --sigdb tests
+        run: |
+          git clone --depth 1 https://github.com/rizinorg/sigdb "$RUNNER_TEMP/sigdb"
+          echo "RIZIN_MCP_TEST_SIGDB=$RUNNER_TEMP/sigdb" >> "$GITHUB_ENV"
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release
       - name: Start without LD_LIBRARY_PATH
