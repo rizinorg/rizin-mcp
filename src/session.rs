@@ -16,6 +16,7 @@ use crate::error::RizinError;
 use crate::pipe::RizinPipe;
 #[cfg(feature = "api")]
 use crate::rzcore::RizinCore;
+use crate::status::CmdOutput;
 
 /// How much automatic analysis to run when opening a file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -74,6 +75,10 @@ pub struct OpenInfo {
     pub analysis: AnalysisLevel,
     /// The parsed output of `ij` (binary info), or `null` if unavailable.
     pub info: Value,
+    /// Why the requested analysis failed, if Rizin reported a failure. The
+    /// file is open either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis_error: Option<String>,
 }
 
 /// A snapshot of the current session state.
@@ -135,9 +140,14 @@ impl SessionManager {
 
         let backend = self.spawn_backend(path, write).await?;
 
+        let mut analysis_error = None;
         if let Some(cmd) = analysis.command() {
-            // Surface a hard failure (backend died/timeout); ignore text output.
-            let _ = backend.cmd(cmd).await?;
+            // A hard failure (backend died/timeout) fails the open; a failure
+            // reported by Rizin leaves a usable, partly analyzed file.
+            let out = backend.exec(cmd).await?;
+            if let Err(e) = crate::backend::check(cmd, out) {
+                analysis_error = Some(e.to_string());
+            }
         }
         let info = backend.cmdj("ij").await.unwrap_or(Value::Null);
 
@@ -155,6 +165,7 @@ impl SessionManager {
             write,
             analysis,
             info,
+            analysis_error,
         })
     }
 
@@ -220,6 +231,24 @@ impl SessionManager {
         }
     }
 
+    /// Run a command against the current session and return its output,
+    /// status, and diagnostics; a failure reported by Rizin is not an error.
+    ///
+    /// # Errors
+    /// [`RizinError::NoFileOpen`] if nothing is open, [`RizinError::SessionClosed`]
+    /// if the backend has died, plus any transport error.
+    pub async fn exec(&self, cmd: &str) -> Result<CmdOutput, RizinError> {
+        let mut guard = self.inner.lock().await;
+        match guard.as_ref() {
+            Some(s) if s.backend.is_alive() => s.backend.exec(cmd).await,
+            Some(_) => {
+                *guard = None;
+                Err(RizinError::SessionClosed)
+            }
+            None => Err(RizinError::NoFileOpen),
+        }
+    }
+
     /// Run a command against the current session and return its text output.
     ///
     /// The session lock is held for the duration of the command, which
@@ -228,7 +257,8 @@ impl SessionManager {
     ///
     /// # Errors
     /// [`RizinError::NoFileOpen`] if nothing is open, [`RizinError::SessionClosed`]
-    /// if the backend has died, plus any command error.
+    /// if the backend has died, [`RizinError::CommandFailed`] if Rizin reports
+    /// a failure, plus any transport error.
     pub async fn cmd(&self, cmd: &str) -> Result<String, RizinError> {
         let mut guard = self.inner.lock().await;
         match guard.as_ref() {

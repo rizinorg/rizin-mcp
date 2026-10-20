@@ -131,6 +131,26 @@ to a text rendering, so clients can parse results directly.
 - **`signature_info`/`version_info`/`resources`** return `null`/`[]` for formats
   that don't carry that data (e.g. a plain ELF is unsigned), rather than erroring.
 
+## Errors
+
+Every tool checks the status Rizin reports for its commands, so a command
+that failed is never mistaken for one that succeeded with no output:
+
+- A failure reported by Rizin becomes a JSON-RPC error with code `-32001`
+  (`rizin command failed`), whose message carries Rizin's own diagnostics
+  (e.g. `Cannot assemble 'mov'`) and whose `data` holds `command`, `status`
+  (`ERROR`, `WRONG_ARGS`, `INVALID`, `NONEXISTINGCMD`) and `detail`.
+- The raw `command` tool returns a tool result with `isError: true` instead,
+  keeping whatever the line printed before it failed.
+- Invalid tool arguments stay `-32602` (`invalid params`).
+
+The diagnostics come from Rizin's log in-process, and from the `rizin`
+process's stderr with the `pipe` backend (on Unix). Exact statuses need
+Rizin 0.10 (`rz_core_cmd_str_status()` and the `_s` command): with older
+Rizin the `api` backend only knows that a command failed (`FAILED`), and the
+`pipe` backend cannot tell (`UNKNOWN`), so it judges commands by their output
+as before.
+
 ## External plugins
 
 Rizin loads core plugins from its plugin directories automatically, so once a
@@ -151,7 +171,8 @@ rz-silhouette`) or from source; nothing in this server needs rebuilding. Run
 
 ## Requirements
 
-- Rust 1.87+ (2024 edition) to build.
+- Rust 1.87+ (2024 edition) to build, and a C compiler for the `api`
+  backend (a few lines of C route Rizin's log messages to the server).
 - **For the default `api` backend:** Rizin's development libraries discoverable
   via `pkg-config` (i.e. `pkg-config --exists rz_core` succeeds). Install Rizin
   with your package manager's `-dev`/`-devel` package, `meson install` from

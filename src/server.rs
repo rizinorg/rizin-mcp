@@ -21,6 +21,7 @@ use crate::config::ServerConfig;
 use crate::error::{IntoMcp, RizinError};
 use crate::params::*;
 use crate::session::{AnalysisLevel, SessionManager};
+use crate::status::CmdStatus;
 use crate::util::{
     at_suffix, clamp_count, parse_hex_bytes, to_hex, validate_algo, validate_location,
     validate_number, validate_path,
@@ -126,13 +127,30 @@ impl RizinServer {
     }
 
     /// Run a JSON command, returning `default` when the command produced no
-    /// output. Used for optional metadata (absent on some formats) and for
-    /// scans whose database may be unavailable, so "no data" is not an error.
+    /// output or failed while running. Used for optional metadata (absent on
+    /// some formats; `iCj` fails on an unsigned ELF) and for scans whose
+    /// database may be unavailable, so "no data" is not an error. A command
+    /// that does not exist or was called wrongly is still an error.
     async fn cmdj_optional(&self, cmd: &str, default: Value) -> Result<Value, ErrorData> {
         match self.manager.cmdj(cmd).await {
             Ok(value) => Ok(value),
-            Err(RizinError::EmptyJson { .. }) => Ok(default),
+            Err(RizinError::EmptyJson { .. })
+            | Err(RizinError::CommandFailed {
+                status: CmdStatus::Error | CmdStatus::Failed,
+                ..
+            }) => Ok(default),
             Err(e) => Err(e.to_error_data()),
+        }
+    }
+
+    /// Map a missing plugin command to a hint naming the plugin.
+    fn plugin_hint(e: RizinError, hint: &str) -> ErrorData {
+        match e {
+            RizinError::CommandFailed {
+                status: CmdStatus::NonExistingCmd | CmdStatus::Failed,
+                ..
+            } => RizinError::NotPermitted(hint.into()).to_error_data(),
+            e => e.to_error_data(),
         }
     }
 }
@@ -222,16 +240,37 @@ impl RizinServer {
     /// Run a raw Rizin command and return its text output.
     #[tool(
         description = "Run a raw Rizin command line and return its text output. Chain \
-        multiple commands with ';'. This exposes the full Rizin surface (including the \
-        debugger and shell escapes), so use with care."
+        multiple commands with ';'. When Rizin reports a failure (e.g. an unknown \
+        command), the result is an error carrying the status, Rizin's messages, and \
+        whatever was printed before the failure. This exposes the full Rizin surface \
+        (including the debugger and shell escapes), so use with care."
     )]
     async fn command(
         &self,
         Parameters(p): Parameters<CommandParams>,
     ) -> Result<CallToolResult, ErrorData> {
         self.ensure_raw()?;
-        let out = self.manager.cmd(&p.command).await.mcp()?;
-        Ok(text_result(out))
+        let out = self.manager.exec(&p.command).await.mcp()?;
+        if !out.status.is_failure() {
+            return Ok(text_result(out.output));
+        }
+        // A chained line may have printed useful output before failing.
+        let mut content = Vec::new();
+        if !out.output.is_empty() {
+            content.push(Content::text(out.output.clone()));
+        }
+        let mut summary = format!("rizin command failed ({})", out.status);
+        if !out.messages.is_empty() {
+            summary.push('\n');
+            summary.push_str(&out.detail());
+        }
+        content.push(Content::text(summary));
+        let mut result = CallToolResult::error(content);
+        result.structured_content = Some(json!({
+            "status": out.status,
+            "messages": out.messages,
+        }));
+        Ok(result)
     }
 
     /// Run a raw Rizin command expecting JSON and return parsed output.
@@ -961,14 +1000,15 @@ impl RizinServer {
         configuration (host/port/psk), e.g. set via the `command` tool or a .rizinrc (sil)."
     )]
     async fn silhouette(&self) -> Result<CallToolResult, ErrorData> {
-        let out = self.manager.cmd("sil").await.mcp()?;
+        const HINT: &str = "no output from `sil`. Ensure the rz-silhouette plugin is \
+             installed and silhouette.{host,port,psk} are configured.";
+        let out = self
+            .manager
+            .cmd("sil")
+            .await
+            .map_err(|e| Self::plugin_hint(e, HINT))?;
         if out.trim().is_empty() {
-            return Err(RizinError::NotPermitted(
-                "no output from `sil`. Ensure the rz-silhouette plugin is installed and \
-                 silhouette.{host,port,psk} are configured."
-                    .into(),
-            )
-            .to_error_data());
+            return Err(RizinError::NotPermitted(HINT.into()).to_error_data());
         }
         Ok(text_result(out))
     }
@@ -980,14 +1020,15 @@ impl RizinServer {
         (sil test)."
     )]
     async fn silhouette_test(&self) -> Result<CallToolResult, ErrorData> {
-        let out = self.manager.cmd("sil test").await.mcp()?;
+        const HINT: &str = "no output from `sil test`. Ensure the rz-silhouette plugin is \
+             installed and silhouette.{host,port,psk} are configured.";
+        let out = self
+            .manager
+            .cmd("sil test")
+            .await
+            .map_err(|e| Self::plugin_hint(e, HINT))?;
         if out.trim().is_empty() {
-            return Err(RizinError::NotPermitted(
-                "no output from `sil test`. Ensure the rz-silhouette plugin is installed and \
-                 silhouette.{host,port,psk} are configured."
-                    .into(),
-            )
-            .to_error_data());
+            return Err(RizinError::NotPermitted(HINT.into()).to_error_data());
         }
         Ok(text_result(out))
     }
@@ -1006,7 +1047,11 @@ impl RizinServer {
         let suffix = at_suffix(&p.at).mcp()?;
         let out = self.manager.cmd(&format!("plf{suffix}")).await.mcp()?;
         if out.trim().is_empty() {
-            return Err(RizinError::EmptyJson { cmd: "plf".into() }.to_error_data());
+            return Err(RizinError::EmptyJson {
+                cmd: "plf".into(),
+                detail: String::new(),
+            }
+            .to_error_data());
         }
         Ok(text_result(out))
     }

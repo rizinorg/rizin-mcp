@@ -4,7 +4,7 @@
 //!
 //! This is the fast path: instead of spawning a `rizin` process and talking to
 //! it over a pipe, it creates an `RzCore` in the same process and runs commands
-//! through [`crate::ffi::Core::cmd_str`]. It exposes the same async `cmd`
+//! through [`crate::ffi::Core::cmd_status`]. It exposes the same async `exec`
 //! interface as [`crate::pipe::RizinPipe`], so the rest of the crate is
 //! agnostic to which backend is in use.
 //!
@@ -36,6 +36,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::error::RizinError;
 use crate::ffi;
+use crate::status::CmdOutput;
 
 /// How long `Drop` waits for the worker to free its core before abandoning it
 /// (only relevant if a command is wedged inside librz).
@@ -44,7 +45,7 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 /// A command to run on the worker thread, with a channel for its result.
 struct Job {
     cmd: String,
-    reply: oneshot::Sender<Result<String, RizinError>>,
+    reply: oneshot::Sender<Result<CmdOutput, RizinError>>,
 }
 
 /// An asynchronous handle to an in-process Rizin core.
@@ -102,12 +103,13 @@ impl RizinCore {
         self.alive.load(Ordering::SeqCst)
     }
 
-    /// Run a single command and return its textual output.
+    /// Run a single command and return its output and status.
     ///
     /// # Errors
     /// Returns an error if the session is dead, the worker is gone, the command
-    /// contains an interior NUL, or it exceeds the configured timeout.
-    pub async fn cmd(&self, cmd: &str) -> Result<String, RizinError> {
+    /// contains an interior NUL, or it exceeds the configured timeout. A command
+    /// Rizin reports as failed is not an error here.
+    pub async fn exec(&self, cmd: &str) -> Result<CmdOutput, RizinError> {
         if cmd.as_bytes().contains(&0) {
             return Err(RizinError::IllegalCommand {
                 cmd: cmd.to_string(),
@@ -191,7 +193,7 @@ fn worker_loop(
     }
 
     while let Some(job) = rx.blocking_recv() {
-        let result = core.cmd_str(&job.cmd);
+        let result = core.cmd_status(&job.cmd);
         let _ = job.reply.send(result);
     }
 
@@ -218,12 +220,13 @@ mod tests {
         if let Ok(core) = core {
             assert!(core.is_alive());
             // Interior NUL is rejected.
-            let err = core.cmd("p8 4\0px").await;
+            let err = core.exec("p8 4\0px").await;
             assert!(matches!(err, Err(RizinError::IllegalCommand { .. })));
             // A normal command returns its captured output in-process.
             // `malloc://64` is zero-filled, so 4 bytes hex-print as zeros.
-            let out = core.cmd("p8 4").await.expect("p8");
-            assert_eq!(out.trim(), "00000000");
+            let out = core.exec("p8 4").await.expect("p8");
+            assert_eq!(out.output.trim(), "00000000");
+            assert!(!out.status.is_failure());
         }
     }
 
@@ -240,9 +243,33 @@ mod tests {
             )
             .await;
             if let Ok(core) = core {
-                assert_eq!(core.cmd("p8 1").await.expect("p8").trim(), "00");
+                let out = core.exec("p8 1").await.expect("p8");
+                assert_eq!(out.output.trim(), "00");
             }
             // `core` dropped here, synchronously freeing it.
         }
+    }
+
+    #[tokio::test]
+    async fn failure_carries_status_and_log_message() {
+        let core = RizinCore::open(
+            "malloc://64",
+            true,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("open malloc://64");
+        let out = core.exec("wa \"bogus insn\"").await.expect("exec");
+        assert!(out.status.is_failure(), "status: {:?}", out.status);
+        assert!(
+            out.detail().contains("Cannot assemble"),
+            "messages: {:?}",
+            out.messages
+        );
+        // The capture ends with the command: a later success has no messages.
+        let ok = core.exec("p8 1").await.expect("exec");
+        assert!(!ok.status.is_failure());
+        assert!(ok.messages.is_empty(), "messages: {:?}", ok.messages);
     }
 }

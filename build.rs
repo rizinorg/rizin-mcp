@@ -18,6 +18,10 @@
 //! Directories the dynamic loader searches anyway get none; set
 //! `RIZIN_RPATH=0` to never embed one (e.g. for distribution packages).
 //!
+//! It also compiles `csrc/log_capture.c`, which routes Rizin's log messages to
+//! the server, and sets `cfg(rz_cmd_status)` when the installed headers declare
+//! `rz_core_cmd_str_status()` (Rizin 0.10+), which reports command status.
+//!
 //! When the `api` feature is disabled, this script does nothing (the server is
 //! built pipe-only and needs no Rizin libraries to compile).
 
@@ -100,8 +104,31 @@ fn is_default_libdir(libdir: &Path) -> bool {
                 .is_some_and(|n| n.to_string_lossy().contains("-linux-")))
 }
 
+/// The `-I` directories of `rz_core` and the libraries it requires.
+fn rizin_include_dirs() -> Vec<PathBuf> {
+    pkg_config(&["--cflags-only-I", "rz_core"])
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|flag| flag.strip_prefix("-I"))
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Whether the installed `rz_core.h` declares `function`.
+fn core_header_declares(include_dirs: &[PathBuf], function: &str) -> bool {
+    include_dirs.iter().any(|dir| {
+        let header = dir.join("rz_core.h");
+        if header.exists() {
+            println!("cargo:rerun-if-changed={}", header.display());
+        }
+        std::fs::read_to_string(&header).is_ok_and(|text| text.contains(function))
+    })
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=csrc/log_capture.c");
+    println!("cargo::rustc-check-cfg=cfg(rz_cmd_status)");
     for var in [
         "RIZIN_STATIC",
         "RIZIN_RPATH",
@@ -129,6 +156,16 @@ fn main() {
     };
 
     let libdir = rizin_libdir(shared_suffix);
+
+    let include_dirs = rizin_include_dirs();
+    if core_header_declares(&include_dirs, "rz_core_cmd_str_status") {
+        println!("cargo:rustc-cfg=rz_cmd_status");
+    }
+    cc::Build::new()
+        .file("csrc/log_capture.c")
+        .includes(&include_dirs)
+        .compile("rizin_mcp_log_capture");
+
     println!("cargo:rustc-link-search=native={}", libdir.display());
     // A Rizin (re)install must refresh the link setup computed here.
     if let Some(core) = core_library(&libdir, shared_suffix) {
