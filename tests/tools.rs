@@ -384,3 +384,102 @@ async fn every_listing_returns_an_object() {
         }
     }
 }
+
+/// Size of a result as a client receives it (its text content).
+fn text_len(r: &CallToolResult) -> usize {
+    r.content
+        .iter()
+        .filter_map(|c| c.as_text().map(|t| t.text.len()))
+        .sum()
+}
+
+#[tokio::test]
+async fn listings_are_paged_and_bounded() {
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+
+        // A default page holds at most 100 items and says what is left.
+        let first = s.ok("list_strings", json!({})).await;
+        let total = first["total"].as_u64().unwrap();
+        assert!(first["returned"].as_u64().unwrap() <= 100, "{t:?}");
+        if total > 100 {
+            assert_eq!(first["truncated"], true, "{t:?}");
+            assert_eq!(first["next_offset"], 100, "{t:?}");
+        }
+
+        // Following next_offset visits every item once.
+        let mut seen = 0;
+        let mut offset = 0;
+        loop {
+            let page = s
+                .ok("list_strings", json!({ "offset": offset, "limit": 250 }))
+                .await;
+            assert_eq!(page["offset"], offset, "{t:?}");
+            seen += page["returned"].as_u64().unwrap();
+            match page.get("next_offset").and_then(Value::as_u64) {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert_eq!(seen, total, "{t:?}");
+
+        // The gadget listing that used to be ~1 MB stays bounded.
+        let r = s
+            .call("search_rop", json!({ "query": "ret" }))
+            .await
+            .expect("search_rop");
+        assert!(text_len(&r) <= 128 << 10, "{t:?}: {} bytes", text_len(&r));
+
+        // A function's instructions are paged too.
+        let f = s
+            .ok("disassemble_function", json!({ "at": "main", "limit": 5 }))
+            .await;
+        assert_eq!(f["ops"].as_array().map(Vec::len), Some(5), "{t:?}");
+        assert_eq!(f["ops_page"]["returned"], 5, "{t:?}");
+        assert!(f["ops_page"]["total"].as_u64().unwrap() > 5, "{t:?}");
+    }
+}
+
+#[tokio::test]
+async fn output_ceiling_applies_to_every_result() {
+    for t in transports() {
+        let s = Session::start(t, |c| c.max_output_bytes = 4096).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+
+        // A listing is cut to what fits, even below the requested limit.
+        let r = s
+            .call("list_functions", json!({ "limit": 1000 }))
+            .await
+            .expect("list_functions");
+        assert!(text_len(&r) <= 4096 + 256, "{t:?}: {}", text_len(&r));
+        let sc = r.structured_content.unwrap();
+        assert_eq!(sc["truncated"], true, "{t:?}");
+
+        // Raw text is truncated with a notice.
+        let r = s
+            .call("command", json!({ "command": "pd 2000 @ entry0" }))
+            .await
+            .expect("command");
+        let text = r.content[0].as_text().unwrap().text.clone();
+        assert!(text.len() <= 4096 + 256, "{t:?}: {}", text.len());
+        assert!(text.contains("[output truncated"), "{t:?}");
+
+        // An object over the ceiling is refused with a hint, not cut.
+        let r = s
+            .call("function_graph", json!({ "at": "main" }))
+            .await
+            .expect("function_graph");
+        assert_eq!(r.is_error, Some(true), "{t:?}");
+        let text = r.content[0].as_text().unwrap().text.clone();
+        assert!(text.contains("output limit"), "{t:?}: {text}");
+    }
+}

@@ -55,6 +55,15 @@ struct Cli {
     /// Startup/analysis timeout in seconds.
     #[arg(long, default_value_t = 60)]
     startup_timeout: u64,
+
+    /// Maximum size of one tool result in bytes: listings are cut to what
+    /// fits, text is truncated, and a larger object is refused.
+    #[arg(long, default_value_t = 128 << 10)]
+    max_output_bytes: usize,
+
+    /// Number of items a listing returns when the client gives no `limit`.
+    #[arg(long, default_value_t = 100)]
+    default_limit: usize,
 }
 
 /// Clap-facing mirror of [`AnalysisLevel`].
@@ -120,6 +129,8 @@ async fn main() -> anyhow::Result<()> {
         allow_debug: cli.allow_debug,
         startup_timeout: Duration::from_secs(cli.startup_timeout),
         command_timeout: Duration::from_secs(cli.command_timeout),
+        max_output_bytes: cli.max_output_bytes,
+        default_limit: cli.default_limit.max(1),
         ..Default::default()
     };
 

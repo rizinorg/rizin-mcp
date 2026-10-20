@@ -30,6 +30,7 @@
 //! * `ffi`/`rzcore` — the in-process C backend (only with the `api` feature).
 //! * [`session`] — session/lifecycle management ([`session::SessionManager`]).
 //! * [`status`] — command status and diagnostics reported by Rizin.
+//! * [`output`] — paging listings and bounding the size of results.
 //! * [`params`] — typed tool-parameter structs (with JSON schemas).
 //! * [`server`] — the MCP server and all tools/resources/prompts
 //!   ([`server::RizinServer`]).
@@ -42,6 +43,7 @@ pub mod config;
 pub mod error;
 #[cfg(feature = "api")]
 pub mod ffi;
+pub mod output;
 pub mod params;
 pub mod pipe;
 #[cfg(feature = "api")]

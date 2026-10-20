@@ -28,6 +28,19 @@ pub struct OpenFileParams {
     pub write: Option<bool>,
 }
 
+/// Paging of a listing.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct PageParams {
+    /// Index of the first item to return (default 0). Pass the
+    /// `next_offset` of the previous page to continue.
+    #[serde(default)]
+    pub offset: Option<u64>,
+    /// Maximum number of items to return (default 100). The server's output
+    /// limit may return fewer; `truncated` then says more remain.
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
 /// Parameters for tools that operate at an optional location.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct AtParams {
@@ -91,6 +104,28 @@ pub struct AddressParams {
     pub address: String,
 }
 
+/// Parameters for the cross-reference listings.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct XrefParams {
+    /// Target address (hex like `0x401000`) or a flag/symbol name.
+    pub address: String,
+    /// Paging.
+    #[serde(flatten)]
+    pub page: PageParams,
+}
+
+/// Parameters for `disassemble_function`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct FunctionPageParams {
+    /// Optional location: a hex address (e.g. `0x401000`) or a flag/symbol name
+    /// (e.g. `main`, `sym.main`, `entry0`). Defaults to the current seek.
+    #[serde(default)]
+    pub at: Option<String>,
+    /// Paging of the function's instructions.
+    #[serde(flatten)]
+    pub page: PageParams,
+}
+
 /// Parameters for `analyze`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct AnalyzeParams {
@@ -114,6 +149,9 @@ pub struct StringsParams {
     /// Defaults to `true`.
     #[serde(default)]
     pub all: Option<bool>,
+    /// Paging.
+    #[serde(flatten)]
+    pub page: PageParams,
 }
 
 /// Parameters for `list_flags`.
@@ -122,6 +160,9 @@ pub struct FlagsParams {
     /// Restrict to a single flag space (e.g. `symbols`, `strings`, `imports`).
     #[serde(default)]
     pub space: Option<String>,
+    /// Paging.
+    #[serde(flatten)]
+    pub page: PageParams,
 }
 
 /// Parameters for `search_string`.
@@ -130,6 +171,9 @@ pub struct SearchStringParams {
     /// String to search for. Matched as its raw UTF-8 bytes, so any characters
     /// are safe.
     pub query: String,
+    /// Paging.
+    #[serde(flatten)]
+    pub page: PageParams,
 }
 
 /// Parameters for `search_bytes`.
@@ -137,6 +181,9 @@ pub struct SearchStringParams {
 pub struct SearchBytesParams {
     /// Hex byte pattern, e.g. `90 90`, `9090`, or `0xdeadbeef`.
     pub hex: String,
+    /// Paging.
+    #[serde(flatten)]
+    pub page: PageParams,
 }
 
 /// Parameters for `write_hex` (write mode only).
@@ -194,6 +241,9 @@ pub struct SearchValueParams {
     /// Width in bytes: 1, 2, 4 (default) or 8.
     #[serde(default)]
     pub size: Option<u64>,
+    /// Paging.
+    #[serde(flatten)]
+    pub page: PageParams,
 }
 
 /// Parameters for ROP gadget search.
@@ -208,6 +258,9 @@ pub struct SearchRopParams {
     /// each matching in full (ignoring case and spacing). Defaults to `false`.
     #[serde(default)]
     pub exact: Option<bool>,
+    /// Paging.
+    #[serde(flatten)]
+    pub page: PageParams,
 }
 
 // --- Diffing ---------------------------------------------------------------
@@ -220,6 +273,9 @@ pub struct CompareBytesParams {
     /// Optional location (hex address or flag/symbol). Defaults to current seek.
     #[serde(default)]
     pub at: Option<String>,
+    /// Paging of the differences.
+    #[serde(flatten)]
+    pub page: PageParams,
 }
 
 /// Parameters for `compare_file`.
@@ -231,6 +287,9 @@ pub struct CompareFileParams {
     /// Optional location (hex address or flag/symbol). Defaults to current seek.
     #[serde(default)]
     pub at: Option<String>,
+    /// Paging of the differences.
+    #[serde(flatten)]
+    pub page: PageParams,
 }
 
 // --- RzIL ------------------------------------------------------------------
