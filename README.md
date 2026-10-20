@@ -189,6 +189,13 @@ directory even for a custom prefix, so the `.pc` files of a
 only a library directory that really contains `librz_core`, and fails with the
 directories it tried otherwise.
 
+A dynamically linked build records Rizin's library directory as an rpath
+(`RUNPATH`), so the binary starts without `LD_LIBRARY_PATH` — which an MCP
+client launching a bare `"command"` cannot set. No rpath is added for the
+loader's default directories (`/usr/lib`, `/usr/lib/<triplet>`, …); set
+`RIZIN_RPATH=0` to never add one, e.g. for distribution packages, and make
+the libraries findable through `ldconfig` or `LD_LIBRARY_PATH` instead.
+
 To build **without** the C library at all (pipe-only; needs no Rizin to
 compile, only a `rizin` binary at run time):
 

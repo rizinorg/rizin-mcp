@@ -13,6 +13,11 @@
 //!   library directory, wrapped in a `--start-group`/`--end-group` so the
 //!   circular dependencies among the Rizin archives resolve.
 //!
+//! A dynamically linked binary gets an rpath to Rizin's library directory, so
+//! it starts without `LD_LIBRARY_PATH` when Rizin lives in a custom prefix.
+//! Directories the dynamic loader searches anyway get none; set
+//! `RIZIN_RPATH=0` to never embed one (e.g. for distribution packages).
+//!
 //! When the `api` feature is disabled, this script does nothing (the server is
 //! built pipe-only and needs no Rizin libraries to compile).
 
@@ -79,10 +84,27 @@ fn rizin_libdir(shared_suffix: &str) -> PathBuf {
     );
 }
 
+/// Whether `libdir` is one the dynamic loader searches without an rpath:
+/// `/lib`, `/usr/lib`, their `64` variants, and multiarch subdirectories such
+/// as `/usr/lib/x86_64-linux-gnu`.
+fn is_default_libdir(libdir: &Path) -> bool {
+    let top = |p: &Path| {
+        ["/lib", "/lib64", "/usr/lib", "/usr/lib64"]
+            .iter()
+            .any(|d| p == Path::new(d))
+    };
+    top(libdir)
+        || (libdir.parent().is_some_and(top)
+            && libdir
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().contains("-linux-")))
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     for var in [
         "RIZIN_STATIC",
+        "RIZIN_RPATH",
         "PKG_CONFIG_PATH",
         "PKG_CONFIG_LIBDIR",
         "PKG_CONFIG_SYSROOT_DIR",
@@ -178,6 +200,12 @@ fn main() {
     } else {
         for l in &libs {
             println!("cargo:rustc-link-lib=dylib={l}");
+        }
+        // MCP clients start the server from a bare command line, where no
+        // LD_LIBRARY_PATH can be set.
+        let rpath_wanted = std::env::var("RIZIN_RPATH").map_or(true, |v| v != "0");
+        if rpath_wanted && !is_default_libdir(&libdir) {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", libdir.display());
         }
     }
 }
