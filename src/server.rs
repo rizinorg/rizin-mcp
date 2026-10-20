@@ -75,6 +75,7 @@ pub const WRITE_TOOLS: &[&str] = &[
     "write_string",
     "write_assembly",
     "flirt_create",
+    "save_project",
 ];
 
 /// The tools that change the analysis (names, comments, flags, types),
@@ -255,7 +256,8 @@ impl RizinServer {
     }
 
     /// Run a command that changes state, failing also when Rizin logs an
-    /// error but reports success, as `f`, `wx` and `Fs` do.
+    /// error but reports success, as `f`, `wx` and `Fs` do. A successful
+    /// command is recorded for `export_annotations`.
     async fn cmd_strict(&self, cmd: &str) -> Result<String, ErrorData> {
         let out = self.manager.exec(cmd).await.mcp()?;
         let out = crate::backend::check(cmd, out).mcp()?;
@@ -273,6 +275,7 @@ impl RizinServer {
             }
             .to_error_data());
         }
+        self.manager.record(cmd.to_string()).await;
         Ok(out.output)
     }
 
@@ -390,6 +393,10 @@ impl RizinServer {
                 to_hex(bytes)
             )));
         }
+        let addr = self.resolve(loc).await?;
+        self.manager
+            .record(format!("wx {} @ {addr}", to_hex(bytes)))
+            .await;
         Ok(())
     }
 
@@ -1215,6 +1222,58 @@ impl RizinServer {
         let sig = quote_arg(&p.signature).mcp()?;
         self.cmd_strict(&format!("afs {sig} @ {addr}")).await?;
         Ok(self.json_result(self.manager.cmdj(&format!("afsj @ {addr}")).await.mcp()?))
+    }
+
+    // --- Persistence -----------------------------------------------------
+
+    /// The recorded changes as a Rizin script.
+    #[tool(
+        description = "Export the renames, comments, flags, signatures and byte writes made \
+        through the tools since the file was opened, as a Rizin script (also after \
+        close_file). Replay it with `. <script>` in Rizin (or the command tool) on the same \
+        binary to restore that work."
+    )]
+    async fn export_annotations(&self) -> Result<CallToolResult, ErrorData> {
+        let (file, commands) = self.manager.journal().await;
+        let mut script = format!(
+            "# rizin-mcp changes for {}\n",
+            file.as_deref().unwrap_or("(no file)")
+        );
+        for cmd in &commands {
+            script.push_str(cmd);
+            script.push('\n');
+        }
+        Ok(self.json_result(json!({
+            "file": file,
+            "commands": commands.len(),
+            "script": script,
+        })))
+    }
+
+    /// Save a Rizin project (`Ps`).
+    #[tool(
+        description = "Save the session (analysis, names, comments, flags, types) as a Rizin \
+        project file (.rzdb), to reopen later with `rizin -p <file>`. Requires --allow-write \
+        (it writes a file to disk) (Ps)."
+    )]
+    async fn save_project(
+        &self,
+        Parameters(p): Parameters<SaveProjectParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if !self.manager.config().allow_write {
+            return Err(RizinError::NotPermitted(
+                "save_project writes a file to disk; start the server with --allow-write".into(),
+            )
+            .to_error_data());
+        }
+        let path = quote_arg(&p.path).mcp()?;
+        let out = self.manager.exec(&format!("Ps {path}")).await.mcp()?;
+        crate::backend::check(&format!("Ps {path}"), out).mcp()?;
+        let bytes = std::fs::metadata(&p.path).map(|m| m.len()).map_err(|e| {
+            RizinError::Io(format!("the project was not written to {}: {e}", p.path))
+                .to_error_data()
+        })?;
+        Ok(self.json_result(json!({ "path": p.path, "bytes": bytes })))
     }
 
     // --- Writing (guarded) ------------------------------------------------

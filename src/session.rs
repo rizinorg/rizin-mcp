@@ -72,6 +72,11 @@ pub struct SessionManager {
 struct Slot {
     session: Option<Session>,
     ended: Option<String>,
+    /// The file the journal belongs to.
+    journal_file: Option<String>,
+    /// The state-changing commands run through the tools since the file was
+    /// opened. Kept past a close, so the work can still be exported.
+    journal: Vec<String>,
 }
 
 impl Slot {
@@ -193,6 +198,8 @@ impl SessionManager {
         *self.inner.lock().await = Slot {
             session: Some(session),
             ended: None,
+            journal_file: Some(path.to_string()),
+            journal: Vec::new(),
         };
 
         Ok(OpenInfo {
@@ -245,9 +252,22 @@ impl SessionManager {
 
     /// Close the current session, if any. Returns whether one was open.
     pub async fn close(&self) -> bool {
-        std::mem::take(&mut *self.inner.lock().await)
-            .session
-            .is_some()
+        let mut slot = self.inner.lock().await;
+        slot.ended = None;
+        slot.session.take().is_some()
+    }
+
+    /// Record a command that changed the analysis or the bytes, for
+    /// [`Self::journal`].
+    pub async fn record(&self, cmd: String) {
+        self.inner.lock().await.journal.push(cmd);
+    }
+
+    /// The file of the last opened session and the state-changing commands
+    /// recorded for it, in order.
+    pub async fn journal(&self) -> (Option<String>, Vec<String>) {
+        let slot = self.inner.lock().await;
+        (slot.journal_file.clone(), slot.journal.clone())
     }
 
     /// A snapshot of the current session state. A session that died (e.g.

@@ -781,3 +781,88 @@ async fn annotations_change_the_analysis() {
         assert_eq!(sig["args"][1]["name"], "args", "{t:?}: {sig}");
     }
 }
+
+#[tokio::test]
+async fn work_can_be_exported_and_saved() {
+    let tmp = std::env::temp_dir();
+    let id = std::process::id();
+    for t in transports() {
+        let script = tmp.join(format!("rizin-mcp-{id}-{t:?}.rz"));
+        let project = tmp.join(format!("rizin-mcp-{id}-{t:?}.rzdb"));
+        let s = Session::start(t, |c| c.allow_write = true).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+        s.ok(
+            "rename_function",
+            json!({ "at": "main", "name": "entry_logic" }),
+        )
+        .await;
+        s.ok(
+            "set_comment",
+            json!({ "address": "entry_logic", "text": "parses; argv @ start" }),
+        )
+        .await;
+        s.ok(
+            "set_flag",
+            json!({ "name": "mcp.mark", "address": "entry0" }),
+        )
+        .await;
+        let saved = s
+            .ok("save_project", json!({ "path": project.to_string_lossy() }))
+            .await;
+        assert!(saved["bytes"].as_u64().unwrap() > 0, "{t:?}");
+
+        // The journal survives closing the file.
+        s.ok("close_file", json!({})).await;
+        let export = s.ok("export_annotations", json!({})).await;
+        assert_eq!(export["commands"], 4, "{t:?}: {export}"); // afn, CC-, CC, f+
+        std::fs::write(&script, export["script"].as_str().unwrap()).unwrap();
+
+        // Replaying the script on a fresh analysis restores the work.
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+        assert_eq!(s.ok("export_annotations", json!({})).await["commands"], 0);
+        let r = s
+            .call(
+                "command",
+                json!({ "command": format!(". {}", script.to_string_lossy()) }),
+            )
+            .await
+            .expect("replay");
+        assert_ne!(r.is_error, Some(true), "{t:?}: {r:?}");
+        let info = s
+            .items("function_info", json!({ "at": "entry_logic" }))
+            .await;
+        assert_eq!(info[0]["name"], "entry_logic", "{t:?}");
+        let c = s
+            .call("command", json!({ "command": "CC. @ entry_logic" }))
+            .await
+            .expect("CC.");
+        assert_eq!(
+            c.content[0].as_text().unwrap().text.trim(),
+            "parses; argv @ start",
+            "{t:?}"
+        );
+        s.ok("seek", json!({ "address": "mcp.mark" })).await;
+
+        // The project reopens in rizin with the renamed function.
+        if pipe_available() {
+            let out = std::process::Command::new(rizin_binary())
+                .args(["-q", "-p"])
+                .arg(&project)
+                .args(["-c", "afl~entry_logic"])
+                .output()
+                .expect("rizin -p");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(stdout.contains("entry_logic"), "{t:?}: {stdout:?}");
+        }
+        let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_file(&project);
+    }
+}
