@@ -16,7 +16,7 @@
 //! When the `api` feature is disabled, this script does nothing (the server is
 //! built pipe-only and needs no Rizin libraries to compile).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn pkg_config(args: &[&str]) -> Option<String> {
@@ -24,30 +24,76 @@ fn pkg_config(args: &[&str]) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
+/// The `librz_core` file in `libdir` matching the wanted link mode, if any.
+fn core_library(libdir: &Path, shared_suffix: &str) -> Option<PathBuf> {
+    [format!("librz_core{shared_suffix}"), "librz_core.a".into()]
+        .into_iter()
+        .map(|name| libdir.join(name))
+        .find(|p| p.exists())
+}
+
+/// Resolve Rizin's library directory, trusting only a directory that really
+/// holds `librz_core`.
+///
+/// The plain `libdir` variable comes first: it is what Meson wrote at install
+/// time. `--define-prefix` is only a fallback for relocated builds, since it
+/// rebuilds the prefix assuming a `<prefix>/lib/pkgconfig` layout and yields
+/// `<prefix>/lib/lib/<triplet>` for a multiarch `lib/<triplet>/pkgconfig` one.
+fn rizin_libdir(shared_suffix: &str) -> PathBuf {
+    let candidates = [
+        pkg_config(&["--variable=libdir", "rz_core"]),
+        pkg_config(&["--define-prefix", "--variable=libdir", "rz_core"]),
+    ];
+    if candidates.iter().all(Option::is_none) {
+        panic!(
+            "could not locate Rizin via pkg-config (looked for `rz_core`).\n\
+             Install the Rizin development libraries, or point PKG_CONFIG_PATH \
+             at the pkgconfig directory of a Rizin install (e.g. \
+             <prefix>/lib/pkgconfig or <prefix>/lib/<triplet>/pkgconfig).\n\
+             To build without the C library, use --no-default-features."
+        );
+    }
+    let mut tried = Vec::new();
+    for dir in candidates.into_iter().flatten() {
+        let dir = PathBuf::from(dir);
+        if core_library(&dir, shared_suffix).is_some() {
+            return dir;
+        }
+        if !tried.contains(&dir) {
+            tried.push(dir);
+        }
+    }
+    panic!(
+        "pkg-config found `rz_core`, but no librz_core{shared_suffix} or librz_core.a \
+         exists in the library directory it reports ({}). Is the Rizin install \
+         complete, and does PKG_CONFIG_PATH point at the right install?",
+        tried
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=RIZIN_STATIC");
-    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    for var in [
+        "RIZIN_STATIC",
+        "PKG_CONFIG_PATH",
+        "PKG_CONFIG_LIBDIR",
+        "PKG_CONFIG_SYSROOT_DIR",
+    ] {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
 
     // Nothing to link for a pipe-only build.
     if std::env::var_os("CARGO_FEATURE_API").is_none() {
         return;
     }
-
-    let libdir = pkg_config(&["--define-prefix", "--variable=libdir", "rz_core"])
-        .or_else(|| pkg_config(&["--variable=libdir", "rz_core"]))
-        .unwrap_or_else(|| {
-            panic!(
-                "could not locate Rizin via pkg-config (looked for `rz_core`).\n\
-                 Install the Rizin development libraries, or point PKG_CONFIG_PATH \
-                 at a Rizin build's lib/pkgconfig directory.\n\
-                 To build without the C library, use --no-default-features."
-            )
-        });
-    println!("cargo:rustc-link-search=native={libdir}");
 
     // Shared libraries use a platform-specific suffix: `.dylib` on macOS, `.so`
     // on other Unix targets. A build script must consult the *target* through
@@ -60,12 +106,20 @@ fn main() {
         ".so"
     };
 
+    let libdir = rizin_libdir(shared_suffix);
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+    // A Rizin (re)install must refresh the link setup computed here.
+    if let Some(core) = core_library(&libdir, shared_suffix) {
+        println!("cargo:rerun-if-changed={}", core.display());
+    }
+    if let Some(pcdir) = pkg_config(&["--variable=pcfiledir", "rz_core"]) {
+        println!("cargo:rerun-if-changed={pcdir}/rz_core.pc");
+    }
+
     let want_static = std::env::var("RIZIN_STATIC").map(|v| v == "1").unwrap_or(false)
         // If only static archives are available, link statically.
-        || (!Path::new(&libdir)
-            .join(format!("librz_core{shared_suffix}"))
-            .exists()
-            && Path::new(&libdir).join("librz_core.a").exists());
+        || (!libdir.join(format!("librz_core{shared_suffix}")).exists()
+            && libdir.join("librz_core.a").exists());
 
     // Discover all Rizin component libraries in the library directory.
     //
@@ -76,28 +130,38 @@ fn main() {
     // collapses the unversioned symlink and any versioned siblings onto the same
     // `rz_<component>` name (deduplicated below).
     let suffix = if want_static { ".a" } else { shared_suffix };
+    let entries = std::fs::read_dir(&libdir).unwrap_or_else(|e| {
+        panic!(
+            "cannot list the Rizin library directory {}: {e}",
+            libdir.display()
+        )
+    });
     let mut libs: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&libdir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(rest) = name.strip_prefix("lib") else {
-                continue;
-            };
-            if !rest.ends_with(suffix) {
-                continue;
-            }
-            // e.g. `rz_util.1.0.dylib` -> `rz_util`, `rz_core.so` -> `rz_core`.
-            let stem = rest.split('.').next().unwrap_or(rest);
-            if stem.starts_with("rz_") {
-                libs.push(stem.to_string());
-            }
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(rest) = name.strip_prefix("lib") else {
+            continue;
+        };
+        if !rest.ends_with(suffix) {
+            continue;
+        }
+        // e.g. `rz_util.1.0.dylib` -> `rz_util`, `rz_core.so` -> `rz_core`.
+        let stem = rest.split('.').next().unwrap_or(rest);
+        if stem.starts_with("rz_") {
+            libs.push(stem.to_string());
         }
     }
     libs.sort();
     libs.dedup();
-    if libs.is_empty() {
-        // Fall back to the umbrella library name.
-        libs.push("rz_core".to_string());
+    // Linking `rz_core` alone leaves symbols such as `rz_mem_free` (in
+    // `rz_util`) unresolved, so a partial set is an error, not a fallback.
+    if !libs.iter().any(|l| l == "rz_core") || !libs.iter().any(|l| l == "rz_util") {
+        panic!(
+            "no complete set of Rizin libraries (*{suffix}) in {}: found [{}], \
+             need at least rz_core and rz_util",
+            libdir.display(),
+            libs.join(", ")
+        );
     }
 
     if want_static {

@@ -182,6 +182,13 @@ export RIZIN_STATIC=1            # link the static archives instead of .so
 cargo build --release
 ```
 
+On Debian/Ubuntu-style hosts Meson installs into a multiarch library
+directory even for a custom prefix, so the `.pc` files of a
+`meson setup --prefix=$HOME/.local/rizin` install live in
+`$HOME/.local/rizin/lib/x86_64-linux-gnu/pkgconfig`. The build script trusts
+only a library directory that really contains `librz_core`, and fails with the
+directories it tried otherwise.
+
 To build **without** the C library at all (pipe-only; needs no Rizin to
 compile, only a `rizin` binary at run time):
 
