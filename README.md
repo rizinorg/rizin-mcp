@@ -98,7 +98,9 @@ to a text rendering, so clients can parse results directly.
   `debug_breakpoints`, `debug_backtrace`, `debug_maps`, `debug_status`
 
 **Writing** (disabled by default — see *Security*)
-- `write_hex`, `write_string`, `write_assembly`
+- `write_hex`, `write_string`, `write_assembly` (instructions separated by `;`
+  or newlines, assembled for the destination address). Every write is read
+  back, since Rizin's `wx` reports success even when it could not write.
 
 **Resources:** `rizin://info`, `rizin://functions`, `rizin://strings`,
 `rizin://sections`, `rizin://imports`, `rizin://exports`, `rizin://symbols`,

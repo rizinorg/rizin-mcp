@@ -198,6 +198,26 @@ pub fn parse_rop_query(query: &str) -> Result<Vec<String>, RizinError> {
     Ok(fields)
 }
 
+/// Split assembly text into instructions at `;` and newlines, with
+/// whitespace collapsed; empty instructions are dropped.
+///
+/// # Errors
+/// Returns [`RizinError::InvalidArgument`] when there is no instruction.
+pub fn parse_instructions(text: &str) -> Result<Vec<String>, RizinError> {
+    let insns: Vec<String> = text
+        .split([';', '\n'])
+        .map(collapse_whitespace)
+        .filter(|i| !i.is_empty())
+        .collect();
+    if insns.is_empty() {
+        return Err(RizinError::InvalidArgument {
+            arg: text.to_string(),
+            reason: "no instruction to assemble".into(),
+        });
+    }
+    Ok(insns)
+}
+
 /// Whether a `/Rj` gadget consists of exactly `fields`, in order: one
 /// instruction per field, each equal to it up to case and whitespace.
 pub fn gadget_matches_exactly(gadget: &serde_json::Value, fields: &[String]) -> bool {
@@ -478,6 +498,19 @@ mod tests {
         assert_eq!(quote_arg("").unwrap(), "\"\"");
         assert!(quote_arg("a\nb").is_err());
         assert!(quote_arg("a\tb").is_err());
+    }
+
+    #[test]
+    fn instructions_split_at_semicolons_and_newlines() {
+        assert_eq!(
+            parse_instructions("mov eax, 1").unwrap(),
+            vec!["mov eax, 1"]
+        );
+        assert_eq!(
+            parse_instructions(" mov  ecx,\t3 ;ret\n nop ;").unwrap(),
+            vec!["mov ecx, 3", "ret", "nop"]
+        );
+        assert!(parse_instructions(" ;\n ").is_err());
     }
 
     #[test]

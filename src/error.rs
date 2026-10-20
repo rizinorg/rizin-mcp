@@ -109,6 +109,18 @@ pub enum RizinError {
         raw: String,
     },
 
+    /// A write did not change the bytes: `wx` reports success even when it
+    /// could not write, so writes are read back.
+    #[error("could not write {len} byte(s) at {at}: {detail}")]
+    WriteFailed {
+        /// The destination.
+        at: String,
+        /// The number of bytes that should have been written.
+        len: usize,
+        /// What Rizin said, or what was read back.
+        detail: String,
+    },
+
     /// The requested operation is disabled by configuration.
     #[error("operation not permitted: {0}")]
     NotPermitted(String),
@@ -143,6 +155,11 @@ impl RizinError {
                 COMMAND_FAILED,
                 self.to_string(),
                 Some(json!({ "command": cmd, "status": status, "detail": detail })),
+            ),
+            WriteFailed { at, detail, .. } => ErrorData::new(
+                COMMAND_FAILED,
+                self.to_string(),
+                Some(json!({ "at": at, "detail": detail })),
             ),
             NoFileOpen
             | SessionClosed

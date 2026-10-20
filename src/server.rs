@@ -23,8 +23,9 @@ use crate::params::*;
 use crate::session::{AnalysisLevel, SessionManager};
 use crate::status::CmdStatus;
 use crate::util::{
-    at_suffix, clamp_count, gadget_matches_exactly, parse_hex_bytes, parse_rop_query, quote_arg,
-    to_hex, validate_algo, validate_location, validate_number, validate_path,
+    at_suffix, clamp_count, gadget_matches_exactly, parse_hex_bytes, parse_instructions,
+    parse_rop_query, quote_arg, to_hex, validate_algo, validate_location, validate_number,
+    validate_path,
 };
 
 /// Resources exposed by the server: `(uri, display name, rizin JSON command)`.
@@ -141,6 +142,45 @@ impl RizinServer {
             }) => Ok(default),
             Err(e) => Err(e.to_error_data()),
         }
+    }
+
+    /// Write `bytes` at `loc` and read them back. `wx` reports success even
+    /// when it could not write (an unmapped address, a read-only map), saying
+    /// so only in an error message.
+    async fn write_verified(&self, loc: &str, bytes: &[u8]) -> Result<(), ErrorData> {
+        let cmd = format!("wx {} @ {loc}", to_hex(bytes));
+        let out = self.manager.exec(&cmd).await.mcp()?;
+        let out = crate::backend::check(&cmd, out).mcp()?;
+        let failed = |detail: String| {
+            RizinError::WriteFailed {
+                at: loc.to_string(),
+                len: bytes.len(),
+                detail,
+            }
+            .to_error_data()
+        };
+        let errors: Vec<&str> = out
+            .messages
+            .iter()
+            .map(String::as_str)
+            .filter(|m| m.starts_with("ERROR"))
+            .collect();
+        if !errors.is_empty() {
+            return Err(failed(errors.join("\n")));
+        }
+        let back = self
+            .manager
+            .cmd(&format!("p8 {} @ {loc}", bytes.len()))
+            .await
+            .mcp()?;
+        if parse_hex_bytes(back.trim()).ok().as_deref() != Some(bytes) {
+            return Err(failed(format!(
+                "read back {} instead of {}",
+                back.trim(),
+                to_hex(bytes)
+            )));
+        }
+        Ok(())
     }
 
     /// Map a missing plugin command to a hint naming the plugin.
@@ -727,8 +767,7 @@ impl RizinServer {
         self.ensure_write().await?;
         let loc = validate_location(&p.address).mcp()?;
         let bytes = parse_hex_bytes(&p.hex).mcp()?;
-        let hex = to_hex(&bytes);
-        self.manager.cmd(&format!("wx {hex} @ {loc}")).await.mcp()?;
+        self.write_verified(&loc, &bytes).await?;
         Ok(json_result(json!({ "wrote": bytes.len(), "at": loc })))
     }
 
@@ -743,15 +782,22 @@ impl RizinServer {
     ) -> Result<CallToolResult, ErrorData> {
         self.ensure_write().await?;
         let loc = validate_location(&p.address).mcp()?;
-        let hex = to_hex(p.text.as_bytes());
-        self.manager.cmd(&format!("wx {hex} @ {loc}")).await.mcp()?;
+        if p.text.is_empty() {
+            return Err(RizinError::InvalidArgument {
+                arg: p.text,
+                reason: "text must not be empty".into(),
+            }
+            .to_error_data());
+        }
+        self.write_verified(&loc, p.text.as_bytes()).await?;
         Ok(json_result(json!({ "wrote": p.text.len(), "at": loc })))
     }
 
-    /// Assemble and write (`wa`).
+    /// Assemble and write (`pa`, then `wx`).
     #[tool(
-        description = "Assemble an instruction (or ';'-separated instructions) and write the \
-        bytes at an address (requires --allow-write and a file opened with write=true)."
+        description = "Assemble one or more instructions (separated by ';' or newlines) for \
+        the destination address and write the bytes there; returns the bytes written. \
+        Requires --allow-write and a file opened with write=true (pa; wx)."
     )]
     async fn write_assembly(
         &self,
@@ -759,16 +805,36 @@ impl RizinServer {
     ) -> Result<CallToolResult, ErrorData> {
         self.ensure_write().await?;
         let loc = validate_location(&p.address).mcp()?;
-        let out = self
-            .manager
-            .cmd(&format!("wa {} @ {loc}", p.assembly))
-            .await
-            .mcp()?;
-        Ok(text_result(if out.trim().is_empty() {
-            format!("Assembled and wrote at {loc}.")
-        } else {
-            out
-        }))
+        let insns = parse_instructions(&p.assembly).mcp()?;
+        // `wa mov eax, 1` assembles each space-separated word as its own
+        // instruction; one quoted, `;`-joined argument keeps them whole.
+        let asm = quote_arg(&insns.join(";")).mcp()?;
+        let cmd = format!("pa {asm} @ {loc}");
+        let out = self.manager.exec(&cmd).await.mcp()?;
+        let out = crate::backend::check(&cmd, out).mcp()?;
+        let bytes = parse_hex_bytes(out.output.trim()).map_err(|_| {
+            // A pipe to Rizin before 0.10 cannot report the failure, but its
+            // message (e.g. "Cannot assemble") says what went wrong.
+            if out.messages.is_empty() {
+                RizinError::InvalidArgument {
+                    arg: p.assembly.clone(),
+                    reason: format!("assembled to no bytes ({:?})", out.output.trim()),
+                }
+            } else {
+                RizinError::CommandFailed {
+                    cmd: cmd.clone(),
+                    status: out.status,
+                    detail: out.detail(),
+                }
+            }
+            .to_error_data()
+        })?;
+        self.write_verified(&loc, &bytes).await?;
+        Ok(json_result(json!({
+            "wrote": bytes.len(),
+            "at": loc,
+            "bytes": to_hex(&bytes),
+        })))
     }
 
     // --- Hashing ----------------------------------------------------------
