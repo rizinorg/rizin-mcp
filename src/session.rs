@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::backend::Backend;
+use crate::backend::{Backend, check, parse_json};
 use crate::config::{ServerConfig, Transport};
 use crate::error::RizinError;
 use crate::pipe::RizinPipe;
@@ -64,7 +64,22 @@ struct Session {
 /// must never be touched from two threads at once.
 pub struct SessionManager {
     config: ServerConfig,
-    inner: Mutex<Option<Session>>,
+    inner: Mutex<Slot>,
+}
+
+/// The session, if any, and why the last one ended on its own.
+#[derive(Default)]
+struct Slot {
+    session: Option<Session>,
+    ended: Option<String>,
+}
+
+impl Slot {
+    /// Drop a session that is no longer usable, remembering why.
+    fn end(&mut self, reason: String) {
+        self.session = None;
+        self.ended = Some(reason);
+    }
 }
 
 /// Information returned after successfully opening a file.
@@ -95,6 +110,10 @@ pub struct SessionState {
     pub write: bool,
     /// The applied analysis level, if a file is open.
     pub analysis: Option<AnalysisLevel>,
+    /// Why the previous session ended on its own (e.g. a command timed out
+    /// and the session was killed), until another file is opened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended: Option<String>,
 }
 
 impl SessionManager {
@@ -102,7 +121,7 @@ impl SessionManager {
     pub fn new(config: ServerConfig) -> Self {
         Self {
             config,
-            inner: Mutex::new(None),
+            inner: Mutex::new(Slot::default()),
         }
     }
 
@@ -158,7 +177,7 @@ impl SessionManager {
             // A hard failure (backend died/timeout) fails the open; a failure
             // reported by Rizin leaves a usable, partly analyzed file.
             let out = backend.exec(cmd).await?;
-            if let Err(e) = crate::backend::check(cmd, out) {
+            if let Err(e) = check(cmd, out) {
                 analysis_error = Some(e.to_string());
             }
         }
@@ -171,7 +190,10 @@ impl SessionManager {
             analysis,
         };
 
-        *self.inner.lock().await = Some(session);
+        *self.inner.lock().await = Slot {
+            session: Some(session),
+            ended: None,
+        };
 
         Ok(OpenInfo {
             file: path.to_string(),
@@ -223,24 +245,32 @@ impl SessionManager {
 
     /// Close the current session, if any. Returns whether one was open.
     pub async fn close(&self) -> bool {
-        self.inner.lock().await.take().is_some()
+        std::mem::take(&mut *self.inner.lock().await)
+            .session
+            .is_some()
     }
 
-    /// A snapshot of the current session state.
+    /// A snapshot of the current session state. A session that died (e.g.
+    /// killed after a command timeout) is reported closed, with the reason.
     pub async fn state(&self) -> SessionState {
-        let guard = self.inner.lock().await;
-        match guard.as_ref() {
+        let mut slot = self.inner.lock().await;
+        if slot.session.as_ref().is_some_and(|s| !s.backend.is_alive()) {
+            slot.end(RizinError::SessionClosed.to_string());
+        }
+        match slot.session.as_ref() {
             Some(s) => SessionState {
                 open: true,
                 file: Some(s.file.clone()),
                 write: s.write,
                 analysis: Some(s.analysis),
+                ended: None,
             },
             None => SessionState {
                 open: false,
                 file: None,
                 write: false,
                 analysis: None,
+                ended: slot.ended.clone(),
             },
         }
     }
@@ -248,58 +278,51 @@ impl SessionManager {
     /// Run a command against the current session and return its output,
     /// status, and diagnostics; a failure reported by Rizin is not an error.
     ///
+    /// The session lock is held for the duration of the command, which
+    /// serialises access (and keeps the in-process backend safe). A session
+    /// that dies meanwhile (timeout, broken pipe) is cleared, and the reason
+    /// kept for [`Self::state`].
+    ///
     /// # Errors
     /// [`RizinError::NoFileOpen`] if nothing is open, [`RizinError::SessionClosed`]
     /// if the backend has died, plus any transport error.
     pub async fn exec(&self, cmd: &str) -> Result<CmdOutput, RizinError> {
-        let mut guard = self.inner.lock().await;
-        match guard.as_ref() {
-            Some(s) if s.backend.is_alive() => s.backend.exec(cmd).await,
-            Some(_) => {
-                *guard = None;
-                Err(RizinError::SessionClosed)
-            }
-            None => Err(RizinError::NoFileOpen),
+        let mut slot = self.inner.lock().await;
+        let Some(session) = slot.session.as_ref() else {
+            return Err(RizinError::NoFileOpen);
+        };
+        if !session.backend.is_alive() {
+            slot.end(RizinError::SessionClosed.to_string());
+            return Err(RizinError::SessionClosed);
         }
+        let result = session.backend.exec(cmd).await;
+        if !session.backend.is_alive() {
+            let reason = match &result {
+                Err(e) => e.to_string(),
+                Ok(_) => RizinError::SessionClosed.to_string(),
+            };
+            slot.end(reason);
+        }
+        result
     }
 
     /// Run a command against the current session and return its text output.
     ///
-    /// The session lock is held for the duration of the command, which
-    /// serialises access (and keeps the in-process backend safe). A session
-    /// found dead is cleared.
-    ///
     /// # Errors
-    /// [`RizinError::NoFileOpen`] if nothing is open, [`RizinError::SessionClosed`]
-    /// if the backend has died, [`RizinError::CommandFailed`] if Rizin reports
-    /// a failure, plus any transport error.
+    /// As [`Self::exec`], plus [`RizinError::CommandFailed`] if Rizin reports a
+    /// failure.
     pub async fn cmd(&self, cmd: &str) -> Result<String, RizinError> {
-        let mut guard = self.inner.lock().await;
-        match guard.as_ref() {
-            Some(s) if s.backend.is_alive() => s.backend.cmd(cmd).await,
-            Some(_) => {
-                *guard = None;
-                Err(RizinError::SessionClosed)
-            }
-            None => Err(RizinError::NoFileOpen),
-        }
+        Ok(check(cmd, self.exec(cmd).await?)?.output)
     }
 
     /// Run a JSON command against the current session and parse its output.
     ///
     /// # Errors
-    /// [`RizinError::NoFileOpen`] if nothing is open, [`RizinError::SessionClosed`]
-    /// if the backend has died, plus any command/JSON error.
+    /// As [`Self::cmd`], plus [`RizinError::EmptyJson`] or
+    /// [`RizinError::Json`] if there is no JSON to parse.
     pub async fn cmdj(&self, cmd: &str) -> Result<Value, RizinError> {
-        let mut guard = self.inner.lock().await;
-        match guard.as_ref() {
-            Some(s) if s.backend.is_alive() => s.backend.cmdj(cmd).await,
-            Some(_) => {
-                *guard = None;
-                Err(RizinError::SessionClosed)
-            }
-            None => Err(RizinError::NoFileOpen),
-        }
+        let out = check(cmd, self.exec(cmd).await?)?;
+        parse_json(cmd, &out)
     }
 }
 
@@ -358,6 +381,7 @@ mod tests {
         let st = mgr.state().await;
         assert!(!st.open);
         assert!(st.file.is_none());
+        assert!(st.ended.is_none());
     }
 
     #[tokio::test]

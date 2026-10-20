@@ -38,7 +38,13 @@ command   (avg)       24.7 µs     79.3 µs        ~3.2x
 (Reproduce with `cargo run --release --example bench`.)
 
 Use `pipe` if you cannot link Rizin, or if you enable the raw `command` tool /
-debugger and want a hard timeout that can kill a wedged command.
+debugger and want a hard timeout that can kill a wedged command. After a
+timeout the session is closed either way (`session_info` then reports
+`open: false` and why it `ended`), but in process the timed-out call keeps
+running and holds Rizin's global lock until it returns: until then, opening a
+new `api` session fails at the startup timeout, and a call that never returns
+blocks the `api` backend for the life of the server. The `pipe` backend kills
+`rizin`, so a new session opens at once.
 
 ## Features
 
