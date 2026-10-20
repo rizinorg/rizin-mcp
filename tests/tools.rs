@@ -193,3 +193,85 @@ async fn search_rop_matches_instruction_chains() {
         assert_eq!(err.code.0, -32602, "{t:?}");
     }
 }
+
+#[tokio::test]
+async fn writes_are_verified() {
+    for t in transports() {
+        let s = Session::start(t, |c| c.allow_write = true).await;
+        s.ok(
+            "open_file",
+            json!({ "path": "malloc://256", "analysis": "none", "write": true }),
+        )
+        .await;
+        let read = |at: &str, n: u64| {
+            let at = at.to_string();
+            let s = &s;
+            async move {
+                s.ok("read_bytes", json!({ "at": at, "count": n })).await["data"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            }
+        };
+
+        // Multi-token instructions are assembled whole.
+        let w = s
+            .ok(
+                "write_assembly",
+                json!({ "address": "0x20", "assembly": "mov eax, 1" }),
+            )
+            .await;
+        assert_eq!(w["bytes"], "b801000000", "{t:?}");
+        assert_eq!(read("0x20", 5).await, "b801000000", "{t:?}");
+
+        // Several instructions, and a branch encoded for its address.
+        let w = s
+            .ok(
+                "write_assembly",
+                json!({ "address": "0x30", "assembly": "mov ecx, 3; ret\njmp 0x30" }),
+            )
+            .await;
+        assert_eq!(w["bytes"], "b903000000c3ebf8", "{t:?}");
+        assert_eq!(read("0x30", 8).await, "b903000000c3ebf8", "{t:?}");
+
+        // Unassemblable input fails with Rizin's reason and writes nothing.
+        let err = s
+            .call(
+                "write_assembly",
+                json!({ "address": "0x50", "assembly": "bogus insn" }),
+            )
+            .await
+            .expect_err("bogus assembly");
+        assert_eq!(err.code.0, -32001, "{t:?}");
+        assert!(
+            err.message.contains("Cannot assemble"),
+            "{t:?}: {}",
+            err.message
+        );
+        assert_eq!(read("0x50", 4).await, "00000000", "{t:?}");
+
+        // `wx` says OK when it cannot write; the tools do not.
+        for (tool, args) in [
+            ("write_hex", json!({ "address": "0xdeadbeef", "hex": "90" })),
+            (
+                "write_string",
+                json!({ "address": "0xdeadbeef", "text": "A" }),
+            ),
+            (
+                "write_assembly",
+                json!({ "address": "0xdeadbeef", "assembly": "nop" }),
+            ),
+        ] {
+            let err = s.call(tool, args).await.expect_err(tool);
+            assert_eq!(err.code.0, -32001, "{t:?} {tool}: {err:?}");
+        }
+        let w = s
+            .ok(
+                "write_hex",
+                json!({ "address": "0x60", "hex": "dead beef" }),
+            )
+            .await;
+        assert_eq!(w["wrote"], 4);
+        assert_eq!(read("0x60", 4).await, "deadbeef", "{t:?}");
+    }
+}

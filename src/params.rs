@@ -162,7 +162,9 @@ pub struct WriteStringParams {
 pub struct WriteAssemblyParams {
     /// Destination address (hex) or flag/symbol name.
     pub address: String,
-    /// Assembly to assemble and write, e.g. `mov eax, 1`. Chain with `;`.
+    /// Assembly to assemble and write, e.g. `mov eax, 1`. Separate several
+    /// instructions with `;` or newlines. Assembled for the destination
+    /// address, so relative branches are encoded for it.
     pub assembly: String,
 }
 
