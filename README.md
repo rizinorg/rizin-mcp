@@ -5,14 +5,17 @@ in pure Rust, that exposes the [Rizin](https://rizin.re) reverse-engineering
 framework to MCP-capable clients (Claude Desktop, IDE assistants, etc.).
 
 It runs Rizin **in-process** through its C library by default — or, optionally,
-by driving a `rizin` subprocess over the pipe interface — and surfaces ~74
+by driving a `rizin` subprocess over the pipe interface — and surfaces 85
 focused tools (binary info & headers, disassembly, decompilation via rz-ghidra
 or jsdec, cross-references, strings, hashing, search, byte diffing, function
-signatures & FLIRT, RzIL emulation, optional patching, and optional debugging),
-9 resources, and 3 guided prompts.
+signatures & FLIRT, RzIL emulation, function summaries, and, when enabled,
+annotation, patching, and debugging), 9 resources, and 3 guided prompts. By
+default 62 tools are offered; see *Security*.
 
 Built on the official [Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk)
-(`rmcp`). Tested end-to-end against Rizin 0.9.0.
+(`rmcp`). Tested end-to-end against Rizin `dev` (0.10.0) and v0.9.1; exact
+command status needs Rizin 0.10 (see *Errors*). Changes are listed in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## Backends
 
@@ -37,7 +40,9 @@ open + close (avg)    10.8 ms     60.7 ms        ~5.6x
 command   (avg)       24.7 µs     79.3 µs        ~3.2x
 ```
 
-(Reproduce with `cargo run --release --example bench`.)
+(Reproduce with `cargo run --release --example bench`.) With Rizin 0.10 the
+`pipe` backend makes a second round trip per command to read its status
+(`_sj`), about 50 µs more.
 
 Use `pipe` if you cannot link Rizin, or if you enable the raw `command` tool /
 debugger and want a hard timeout that can kill a wedged command. After a
@@ -244,8 +249,9 @@ them (`hint`), instead of just returning nothing.
   via `pkg-config` (i.e. `pkg-config --exists rz_core` succeeds). Install Rizin
   with your package manager's `-dev`/`-devel` package, `meson install` from
   source, or point `PKG_CONFIG_PATH` at a Rizin build's `lib/pkgconfig`.
-- **For the `pipe` backend:** a `rizin` executable (0.9.0 recommended) on your
-  `PATH`, or pass `--rizin /path/to/rizin`. The `api` backend needs no binary.
+- **For the `pipe` backend:** a `rizin` executable (0.10 recommended, 0.9
+  works) on your `PATH`, or pass `--rizin /path/to/rizin`. The `api` backend
+  needs no binary.
 - Decompilation via `decompile` is best with the
   [rz-ghidra](https://github.com/rizinorg/rz-ghidra/) (`pdg`) or
   [jsdec](https://github.com/rizinorg/jsdec/) (`pdd`) plugin installed; without
