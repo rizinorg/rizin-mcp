@@ -546,6 +546,52 @@ impl RizinServer {
         Ok(self.json_result(serde_json::to_value(info).unwrap_or(Value::Null)))
     }
 
+    /// Open bytes sent by the client.
+    #[tool(
+        description = "Open a file sent as data (base64 by default, or hex) instead of a path, \
+        e.g. a sample attached in the chat, and run initial analysis like open_file. The bytes \
+        go to a private temporary file deleted when the session ends. Up to 64 MiB."
+    )]
+    async fn open_data(
+        &self,
+        Parameters(p): Parameters<OpenDataParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let encoding = p.encoding.as_deref().unwrap_or("base64").to_lowercase();
+        let bytes = match encoding.as_str() {
+            // Accept line-wrapped base64.
+            "base64" => {
+                let compact: String = p.data.split_whitespace().collect();
+                BASE64.decode(compact).map_err(|e| {
+                    RizinError::InvalidArgument {
+                        arg: "data".into(),
+                        reason: format!("invalid base64: {e}"),
+                    }
+                    .to_error_data()
+                })?
+            }
+            "hex" => parse_hex_bytes(&p.data).mcp()?,
+            other => {
+                return Err(RizinError::InvalidArgument {
+                    arg: other.to_string(),
+                    reason: "encoding must be 'base64' or 'hex'".into(),
+                }
+                .to_error_data());
+            }
+        };
+        let name = p.name.as_deref().unwrap_or("sample.bin");
+        let info = self
+            .manager
+            .open_bytes(
+                &bytes,
+                name,
+                p.analysis.unwrap_or_default(),
+                p.write.unwrap_or(false),
+            )
+            .await
+            .mcp()?;
+        Ok(self.json_result(serde_json::to_value(info).unwrap_or(Value::Null)))
+    }
+
     /// Close the current session.
     #[tool(description = "Close the currently open file and tear down the Rizin session.")]
     async fn close_file(&self) -> Result<CallToolResult, ErrorData> {

@@ -3,7 +3,7 @@
 //! Session lifecycle: opening files, tracking the active Rizin process, and
 //! serialising command access through it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,57 @@ struct Session {
     file: String,
     write: bool,
     analysis: AnalysisLevel,
+    /// The file holding bytes opened with [`SessionManager::open_bytes`];
+    /// declared after `backend` so Rizin closes it before it is deleted.
+    _data: Option<TempFile>,
+}
+
+/// Largest sample [`SessionManager::open_bytes`] accepts.
+pub const MAX_DATA_BYTES: usize = 64 << 20;
+
+/// A file created for the session and deleted with it.
+struct TempFile(PathBuf);
+
+impl TempFile {
+    /// Write `bytes` to a new private file named after `name`.
+    fn create(name: &str, bytes: &[u8]) -> Result<Self, RizinError> {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+
+        let dir = std::env::temp_dir().join(format!("rizin-mcp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| RizinError::Io(e.to_string()))?;
+        // Keep a recognizable but harmless file name.
+        let safe: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            .take(64)
+            .collect();
+        let safe = safe.trim_start_matches('.');
+        let safe = if safe.is_empty() { "sample.bin" } else { safe };
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("{n}-{safe}"));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .map_err(|e| RizinError::Io(format!("cannot create {}: {e}", path.display())))?;
+        let file_guard = TempFile(path);
+        file.write_all(bytes)
+            .map_err(|e| RizinError::Io(e.to_string()))?;
+        Ok(file_guard)
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Owns the (at most one) active Rizin session and brokers access to it.
@@ -148,6 +199,45 @@ impl SessionManager {
         analysis: AnalysisLevel,
         write: bool,
     ) -> Result<OpenInfo, RizinError> {
+        self.open_with(path, analysis, write, None).await
+    }
+
+    /// Open `bytes` (e.g. a sample sent by the client) as a file named after
+    /// `name`, which lives as long as the session.
+    ///
+    /// # Errors
+    /// [`RizinError::InvalidArgument`] for empty or oversized data, plus the
+    /// errors of [`Self::open`].
+    pub async fn open_bytes(
+        &self,
+        bytes: &[u8],
+        name: &str,
+        analysis: AnalysisLevel,
+        write: bool,
+    ) -> Result<OpenInfo, RizinError> {
+        if bytes.is_empty() || bytes.len() > MAX_DATA_BYTES {
+            return Err(RizinError::InvalidArgument {
+                arg: format!("{} bytes", bytes.len()),
+                reason: format!("data must hold 1 to {MAX_DATA_BYTES} bytes"),
+            });
+        }
+        if write && !self.config.allow_write {
+            return Err(RizinError::NotPermitted(
+                "write mode is disabled; start the server with --allow-write".into(),
+            ));
+        }
+        let data = TempFile::create(name, bytes)?;
+        let path = data.0.to_string_lossy().into_owned();
+        self.open_with(&path, analysis, write, Some(data)).await
+    }
+
+    async fn open_with(
+        &self,
+        path: &str,
+        analysis: AnalysisLevel,
+        write: bool,
+        data: Option<TempFile>,
+    ) -> Result<OpenInfo, RizinError> {
         if write && !self.config.allow_write {
             return Err(RizinError::NotPermitted(
                 "write mode is disabled; start the server with --allow-write".into(),
@@ -193,6 +283,7 @@ impl SessionManager {
             file: path.to_string(),
             write,
             analysis,
+            _data: data,
         };
 
         *self.inner.lock().await = Slot {
@@ -412,6 +503,23 @@ mod tests {
         });
         let err = mgr.open("/bin/ls", AnalysisLevel::None, true).await;
         assert!(matches!(err, Err(RizinError::NotPermitted(_))));
+    }
+
+    #[test]
+    fn temp_files_are_private_and_removed() {
+        let t = TempFile::create("../../etc/passwd x", b"abc").expect("create");
+        let path = t.0.clone();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.ends_with("-etcpasswdx"), "{name}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        drop(t);
+        assert!(!path.exists());
     }
 
     #[tokio::test]
