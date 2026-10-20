@@ -23,8 +23,12 @@
 //! through the raw command tool), it cannot be safely interrupted the way a
 //! subprocess can be killed. On timeout the call returns
 //! [`RizinError::CommandTimeout`] and the session is marked dead; the worker
-//! may stay blocked until the C call returns, so its core is abandoned (freed
-//! by the OS at exit) rather than joined. For workloads that need hard
+//! stays blocked until the C call returns, holding the global Rizin lock, so
+//! its core is abandoned rather than joined. Until that call returns, a new
+//! in-process session cannot be created either: opening one fails at the
+//! startup timeout. A command that returns on its own (as in a `!sleep` test)
+//! only delays the next session; one that never returns blocks the in-process
+//! backend for the life of the server. For workloads that need hard
 //! cancellation, use the pipe backend.
 
 use std::sync::Mutex;
@@ -128,7 +132,10 @@ impl RizinCore {
 
         match tokio::time::timeout(self.cmd_timeout, rx).await {
             Ok(Ok(res)) => res,
-            Ok(Err(_)) => Err(RizinError::WorkerGone),
+            Ok(Err(_)) => {
+                self.alive.store(false, Ordering::SeqCst);
+                Err(RizinError::WorkerGone)
+            }
             Err(_elapsed) => {
                 // The C call cannot be interrupted; refuse further work so the
                 // server stays responsive instead of queueing behind it.

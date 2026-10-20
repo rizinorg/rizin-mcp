@@ -193,8 +193,16 @@ impl RizinPipe {
             .map_err(|_| RizinError::WorkerGone)?;
 
         match tokio::time::timeout(self.cmd_timeout, rx).await {
-            Ok(Ok(res)) => res,
-            Ok(Err(_)) => Err(RizinError::WorkerGone),
+            Ok(Ok(Ok(out))) => Ok(out),
+            // The worker stops serving after a broken or desynchronised pipe.
+            Ok(Ok(Err(e))) => {
+                self.kill();
+                Err(e)
+            }
+            Ok(Err(_)) => {
+                self.kill();
+                Err(RizinError::WorkerGone)
+            }
             Err(_elapsed) => {
                 // The worker is blocked reading a response that will never come
                 // in time. Killing Rizin unblocks it; mark the session dead so
