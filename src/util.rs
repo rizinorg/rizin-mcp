@@ -43,6 +43,30 @@ pub fn validate_location(at: &str) -> Result<String, RizinError> {
     Ok(trimmed.to_string())
 }
 
+/// Validate a flag name: `[A-Za-z0-9_.:]`, which Rizin keeps unchanged.
+///
+/// # Errors
+/// Returns [`RizinError::InvalidArgument`] for an empty or long name, or one
+/// with other characters.
+pub fn validate_flag_name(name: &str) -> Result<String, RizinError> {
+    if name.is_empty() || name.len() > 255 {
+        return Err(RizinError::InvalidArgument {
+            arg: name.to_string(),
+            reason: "flag name is empty or too long (max 255 chars)".into(),
+        });
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':'))
+    {
+        return Err(RizinError::InvalidArgument {
+            arg: name.to_string(),
+            reason: "only [A-Za-z0-9_.:] are allowed in flag names".into(),
+        });
+    }
+    Ok(name.to_string())
+}
+
 /// Build a ` @ <location>` suffix for an optional location, or an empty string
 /// when no location is given.
 ///
@@ -346,6 +370,15 @@ mod tests {
             "back`tick",
         ] {
             assert!(validate_location(bad).is_err(), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn flag_names() {
+        assert!(validate_flag_name("crypto.key_schedule").is_ok());
+        assert!(validate_flag_name("a:b_1").is_ok());
+        for bad in ["", "a b", "a;f-*", "a@b", "x$"] {
+            assert!(validate_flag_name(bad).is_err(), "should reject {bad:?}");
         }
     }
 

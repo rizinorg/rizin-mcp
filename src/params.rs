@@ -186,6 +186,68 @@ pub struct SearchBytesParams {
     pub page: PageParams,
 }
 
+/// Parameters for `rename_function`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RenameFunctionParams {
+    /// A location inside the function (hex address or flag/symbol name).
+    pub at: String,
+    /// The new name, e.g. `parse_args`.
+    pub name: String,
+}
+
+/// Parameters for `rename_variable`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RenameVariableParams {
+    /// A location inside the function (hex address or flag/symbol name).
+    pub at: String,
+    /// The current name of the argument or local variable (see
+    /// `function_variables`).
+    pub old_name: String,
+    /// The new name.
+    pub new_name: String,
+}
+
+/// Parameters for `set_comment`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetCommentParams {
+    /// Address (hex) or flag/symbol name.
+    pub address: String,
+    /// The comment text (one line).
+    pub text: String,
+    /// Append to an existing comment instead of replacing it. Defaults to
+    /// `false`.
+    #[serde(default)]
+    pub append: Option<bool>,
+}
+
+/// Parameters for `set_flag`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetFlagParams {
+    /// Flag name, made of `[A-Za-z0-9_.:]`, e.g. `crypto.key_schedule`.
+    pub name: String,
+    /// Address (hex) or flag/symbol name the flag marks.
+    pub address: String,
+    /// Size in bytes of the flagged item. Defaults to 1.
+    #[serde(default)]
+    pub size: Option<u64>,
+}
+
+/// Parameters for `remove_flag`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FlagNameParams {
+    /// Flag name.
+    pub name: String,
+}
+
+/// Parameters for `set_function_signature`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetSignatureParams {
+    /// A location inside the function (hex address or flag/symbol name).
+    pub at: String,
+    /// C prototype, e.g. `int parse_args(int argc, char **argv)`.
+    pub signature: String,
+}
+
 /// Parameters for `write_hex` (write mode only).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteHexParams {

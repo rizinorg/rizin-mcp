@@ -123,6 +123,12 @@ produces the full listing, which the server then slices.
   `debug_registers`, `debug_breakpoint`/`debug_breakpoint_remove`,
   `debug_breakpoints`, `debug_backtrace`, `debug_maps`, `debug_status`
 
+**Annotating** (needs `--allow-write`; changes the analysis, not the file)
+- `rename_function`, `rename_variable`, `set_comment` / `remove_comment`,
+  `set_flag` / `remove_flag`, `set_function_signature` — record what was
+  understood so later disassembly and decompilation show it. Each returns
+  the state Rizin stored, and fails when Rizin only logs an error.
+
 **Writing** (disabled by default — see *Security*)
 - `write_hex`, `write_string`, `write_assembly` (instructions separated by `;`
   or newlines, assembled for the destination address). Every write is read
@@ -332,9 +338,9 @@ Two capabilities are gated:
 
 A tool whose capability is disabled is left out of `tools/list` altogether
 (and refused if called anyway), so clients do not offer or try it: the raw
-tools with `--no-raw`, the write tools (including `flirt_create`, which
-writes a file) without `--allow-write`, and the `debug_*` tools without
-`--allow-debug`.
+tools with `--no-raw`, the write and annotation tools (including
+`flirt_create`, which writes a file) without `--allow-write`, and the
+`debug_*` tools without `--allow-debug`.
 
 Addresses and flag names passed to tools are validated against a strict
 character set, and every command is checked for the NUL byte (and, for the pipe

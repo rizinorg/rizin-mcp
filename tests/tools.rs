@@ -678,3 +678,106 @@ async fn listing_one_flag_space_leaves_the_others_visible() {
         );
     }
 }
+
+#[tokio::test]
+async fn annotations_change_the_analysis() {
+    for t in transports() {
+        let s = Session::start(t, |c| c.allow_write = true).await;
+        // Annotating needs no write-mode file.
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+
+        let r = s
+            .ok(
+                "rename_function",
+                json!({ "at": "main", "name": "parse_args" }),
+            )
+            .await;
+        assert_eq!(r["previous_name"], "main", "{t:?}: {r}");
+        assert_eq!(r["name"], "parse_args", "{t:?}: {r}");
+        let info = s
+            .items("function_info", json!({ "at": "parse_args" }))
+            .await;
+        assert_eq!(info[0]["name"], "parse_args", "{t:?}");
+
+        let r = s
+            .ok(
+                "rename_variable",
+                json!({ "at": "parse_args", "old_name": "argc", "new_name": "nargs" }),
+            )
+            .await;
+        assert_eq!(r["new_name"], "nargs", "{t:?}");
+        let vars = s
+            .ok("function_variables", json!({ "at": "parse_args" }))
+            .await;
+        assert!(vars.to_string().contains("\"nargs\""), "{t:?}: {vars}");
+        let err = s
+            .call(
+                "rename_variable",
+                json!({ "at": "parse_args", "old_name": "nosuchvar", "new_name": "x" }),
+            )
+            .await
+            .expect_err("unknown variable");
+        // `afvn` reports success here, only logging the error.
+        assert!(err.message.contains("nosuchvar"), "{t:?}: {}", err.message);
+
+        // Comments keep shell metacharacters verbatim.
+        let text = "checks argv; see @0x10 | \"quoted\" $(x)";
+        let r = s
+            .ok(
+                "set_comment",
+                json!({ "address": "parse_args", "text": text }),
+            )
+            .await;
+        assert_eq!(r["comment"], text, "{t:?}");
+        let r = s
+            .ok(
+                "set_comment",
+                json!({ "address": "parse_args", "text": "more", "append": true }),
+            )
+            .await;
+        assert_eq!(r["comment"], format!("{text} more"), "{t:?}");
+        let r = s
+            .ok(
+                "set_comment",
+                json!({ "address": "parse_args", "text": "fresh" }),
+            )
+            .await;
+        assert_eq!(r["comment"], "fresh", "{t:?}");
+        s.ok("remove_comment", json!({ "address": "parse_args" }))
+            .await;
+
+        // A flag becomes a usable location, and is gone once removed.
+        let r = s
+            .ok(
+                "set_flag",
+                json!({ "name": "mcp.marker", "address": "parse_args", "size": 16 }),
+            )
+            .await;
+        assert_eq!(
+            r["at"],
+            s.ok("seek", json!({ "address": "parse_args" })).await["offset"]
+        );
+        s.ok("read_bytes", json!({ "at": "mcp.marker", "count": 4 }))
+            .await;
+        s.ok("remove_flag", json!({ "name": "mcp.marker" })).await;
+        assert!(
+            s.call("remove_flag", json!({ "name": "mcp.marker" }))
+                .await
+                .is_err(),
+            "{t:?}: removing an unknown flag must fail"
+        );
+
+        let sig = s
+            .ok(
+                "set_function_signature",
+                json!({ "at": "parse_args", "signature": "int parse_args(int nargs, char **args)" }),
+            )
+            .await;
+        assert_eq!(sig["ret"], "int", "{t:?}: {sig}");
+        assert_eq!(sig["args"][1]["name"], "args", "{t:?}: {sig}");
+    }
+}
