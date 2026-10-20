@@ -46,7 +46,8 @@ All tools return structured JSON (via Rizin's `j`-suffixed commands) in addition
 to a text rendering, so clients can parse results directly.
 
 **Session**
-- `open_file` — open a binary/file or Rizin URI (`malloc://`, `hex://`, …) and run analysis
+- `open_file` — open a binary/file or Rizin URI (`malloc://`, `hex://`, …) and run
+  analysis; `-` opens a session with no file
 - `close_file`, `session_info`, `analyze` (none/basic/full/experimental), `seek`
 - `command`, `command_json` — raw Rizin passthrough (see *Security* below)
 

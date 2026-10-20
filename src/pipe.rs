@@ -69,15 +69,17 @@ impl RizinPipe {
     /// Spawn `rizin -q0 [extra_args...] <target>` and wait for it to become
     /// ready.
     ///
-    /// `target` may be a filesystem path or any Rizin URI (e.g. `malloc://512`)
-    /// or `-` for an empty session.
+    /// `target` may be a filesystem path or any Rizin URI (e.g. `malloc://512`),
+    /// or `None` for an empty session. (`rizin -` would read a file from stdin,
+    /// which is the command pipe.)
     ///
     /// # Errors
-    /// Returns an error if the process cannot be spawned, the startup handshake
-    /// fails, or Rizin does not become ready within `startup_timeout`.
+    /// Returns an error if the process cannot be spawned, Rizin cannot open the
+    /// target, the startup handshake fails, or Rizin does not become ready
+    /// within `startup_timeout`.
     pub async fn spawn(
         binary: &str,
-        target: &str,
+        target: Option<&str>,
         extra_args: &[String],
         startup_timeout: Duration,
         cmd_timeout: Duration,
@@ -85,7 +87,7 @@ impl RizinPipe {
         let mut child = Command::new(binary)
             .arg("-q0")
             .args(extra_args)
-            .arg(target)
+            .args(target)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Read Rizin's diagnostics where that is supported; they are
@@ -111,13 +113,22 @@ impl RizinPipe {
             .take()
             .ok_or_else(|| RizinError::Io("child process has no stdout".into()))?;
         let stderr = child.stderr.take();
+        let target_owned = target.map(str::to_string);
 
         let (tx, rx) = mpsc::unbounded_channel::<Job>();
         let (ready_tx, ready_rx) = oneshot::channel::<Result<(), RizinError>>();
 
         let join = std::thread::Builder::new()
             .name("rizin-pipe".into())
-            .spawn(move || worker_loop(stdin, PipeIo::new(stdout, stderr), ready_tx, rx))
+            .spawn(move || {
+                worker_loop(
+                    stdin,
+                    PipeIo::new(stdout, stderr),
+                    target_owned,
+                    ready_tx,
+                    rx,
+                )
+            })
             .map_err(|e| RizinError::Io(format!("failed to spawn worker thread: {e}")))?;
 
         match tokio::time::timeout(startup_timeout, ready_rx).await {
@@ -216,6 +227,7 @@ impl Drop for RizinPipe {
 fn worker_loop(
     mut stdin: ChildStdin,
     mut io: PipeIo,
+    target: Option<String>,
     ready_tx: oneshot::Sender<Result<(), RizinError>>,
     mut rx: mpsc::UnboundedReceiver<Job>,
 ) {
@@ -223,13 +235,18 @@ fn worker_loop(
     match io.read_frame() {
         Ok(Some(_)) => {}
         Ok(None) => {
+            // Rizin exits before the handshake when it cannot open the target.
             let detail = io.take_stderr().join("\n");
-            let reason = if detail.is_empty() {
-                "rizin exited before it was ready".to_string()
-            } else {
-                format!("rizin exited before it was ready: {detail}")
+            let err = match target {
+                Some(target) => RizinError::OpenFailed { target, detail },
+                None if detail.is_empty() => {
+                    RizinError::Handshake("rizin exited before it was ready".into())
+                }
+                None => {
+                    RizinError::Handshake(format!("rizin exited before it was ready: {detail}"))
+                }
             };
-            let _ = ready_tx.send(Err(RizinError::Handshake(reason)));
+            let _ = ready_tx.send(Err(err));
             return;
         }
         Err(e) => {

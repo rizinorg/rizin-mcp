@@ -18,6 +18,9 @@ use crate::pipe::RizinPipe;
 use crate::rzcore::RizinCore;
 use crate::status::CmdOutput;
 
+/// The `open_file` path that opens a session without a file.
+pub const EMPTY_SESSION: &str = "-";
+
 /// How much automatic analysis to run when opening a file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -108,9 +111,9 @@ impl SessionManager {
         &self.config
     }
 
-    /// Open `path` (a filesystem path or Rizin URI), optionally enabling write
-    /// mode, and run the requested analysis level. Replaces any current
-    /// session (closing the previous backend).
+    /// Open `path` (a filesystem path or Rizin URI, or `-` for an empty
+    /// session), optionally enabling write mode, and run the requested analysis
+    /// level. Replaces any current session (closing the previous backend).
     ///
     /// # Errors
     /// Returns an error if write mode is requested but disabled, a plain path
@@ -126,8 +129,18 @@ impl SessionManager {
                 "write mode is disabled; start the server with --allow-write".into(),
             ));
         }
-        if !is_rizin_uri(path) && path != "-" && !Path::new(path).exists() {
-            return Err(RizinError::FileNotFound(path.to_string()));
+        if !is_rizin_uri(path) && path != EMPTY_SESSION {
+            if !Path::new(path).exists() {
+                return Err(RizinError::FileNotFound(path.to_string()));
+            }
+            // The `rizin` CLI refuses directories, but the library opens one as
+            // an endless file.
+            if Path::new(path).is_dir() {
+                return Err(RizinError::InvalidArgument {
+                    arg: path.to_string(),
+                    reason: "is a directory, not a file".into(),
+                });
+            }
         }
 
         // Tear down any existing session first, so at most one backend is ever
@@ -171,11 +184,12 @@ impl SessionManager {
 
     /// Construct the configured backend for `path`.
     async fn spawn_backend(&self, path: &str, write: bool) -> Result<Backend, RizinError> {
+        let target = (path != EMPTY_SESSION).then_some(path);
         match self.config.transport {
             #[cfg(feature = "api")]
             Transport::Api => Ok(Backend::Api(
                 RizinCore::open(
-                    path,
+                    target,
                     write,
                     self.config.startup_timeout,
                     self.config.command_timeout,
@@ -196,7 +210,7 @@ impl SessionManager {
                 Ok(Backend::Pipe(
                     RizinPipe::spawn(
                         &self.config.rizin_binary,
-                        path,
+                        target,
                         &extra,
                         self.config.startup_timeout,
                         self.config.command_timeout,

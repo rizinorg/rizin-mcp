@@ -61,14 +61,14 @@ pub struct RizinCore {
 }
 
 impl RizinCore {
-    /// Create a core, open `path` (a filesystem path or Rizin URI), and get it
-    /// ready for commands.
+    /// Create a core, open `path` (a filesystem path or Rizin URI; `None` for
+    /// an empty session), and get it ready for commands.
     ///
     /// # Errors
     /// Returns an error if the core cannot be allocated, the target fails to
     /// open, or readiness is not reached within `startup_timeout`.
     pub async fn open(
-        path: &str,
+        path: Option<&str>,
         write: bool,
         startup_timeout: Duration,
         cmd_timeout: Duration,
@@ -76,7 +76,7 @@ impl RizinCore {
         let (tx, rx) = mpsc::unbounded_channel::<Job>();
         let (ready_tx, ready_rx) = oneshot::channel::<Result<(), RizinError>>();
         let (done_tx, done_rx) = std_mpsc::channel::<()>();
-        let path_owned = path.to_string();
+        let path_owned = path.map(str::to_string);
 
         std::thread::Builder::new()
             .name("rizin-core".into())
@@ -158,7 +158,7 @@ impl Drop for RizinCore {
 
 /// Worker thread: own the core for its entire lifetime, service commands.
 fn worker_loop(
-    path: String,
+    path: Option<String>,
     write: bool,
     ready_tx: oneshot::Sender<Result<(), RizinError>>,
     mut rx: mpsc::UnboundedReceiver<Job>,
@@ -176,16 +176,11 @@ fn worker_loop(
     };
     core.configure();
 
-    match core.file_open_load(&path, write) {
-        Ok(true) => {}
-        Ok(false) => {
-            let _ = ready_tx.send(Err(RizinError::FileNotFound(path)));
-            return;
-        }
-        Err(e) => {
-            let _ = ready_tx.send(Err(e));
-            return;
-        }
+    if let Some(path) = path
+        && let Err(e) = core.file_open_load(&path, write)
+    {
+        let _ = ready_tx.send(Err(e));
+        return;
     }
 
     if ready_tx.send(Ok(())).is_err() {
@@ -211,7 +206,7 @@ mod tests {
         // Open a tiny in-memory target so the session is live. `malloc://`
         // needs no file on disk.
         let core = RizinCore::open(
-            "malloc://64",
+            Some("malloc://64"),
             false,
             Duration::from_secs(30),
             Duration::from_secs(30),
@@ -236,7 +231,7 @@ mod tests {
         // Drop) before the next is created.
         for _ in 0..5 {
             let core = RizinCore::open(
-                "malloc://16",
+                Some("malloc://16"),
                 false,
                 Duration::from_secs(30),
                 Duration::from_secs(30),
@@ -253,7 +248,7 @@ mod tests {
     #[tokio::test]
     async fn failure_carries_status_and_log_message() {
         let core = RizinCore::open(
-            "malloc://64",
+            Some("malloc://64"),
             true,
             Duration::from_secs(30),
             Duration::from_secs(30),
