@@ -86,6 +86,13 @@ pub enum RizinError {
         detail: String,
     },
 
+    /// A text command succeeded but printed nothing.
+    #[error("rizin printed nothing for: {cmd}")]
+    EmptyOutput {
+        /// The command.
+        cmd: String,
+    },
+
     /// Rizin ran the command and reported that it failed.
     #[error("rizin command failed ({status}): {cmd}{}", fmt_detail(.detail))]
     CommandFailed {
@@ -175,6 +182,7 @@ impl RizinError {
             | InvalidArgument { .. }
             | IllegalCommand { .. }
             | EmptyJson { .. }
+            | EmptyOutput { .. }
             | FileNotFound(_)
             | OpenFailed { .. }
             | NotPermitted(_) => ErrorData::invalid_params(self.to_string(), None),

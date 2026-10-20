@@ -522,3 +522,83 @@ async fn disabled_tools_are_not_offered() {
     assert_eq!(err.code.0, -32602, "{err:?}");
     assert!(err.message.contains("not found"), "{err:?}");
 }
+
+#[tokio::test]
+async fn errors_say_what_went_wrong() {
+    let pat = std::env::temp_dir().join(format!("rizin-mcp-test-{}.pat", std::process::id()));
+    let pat = pat.to_string_lossy().into_owned();
+    for t in transports() {
+        let s = Session::start(t, |c| c.allow_write = true).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+
+        // An unmapped address fails with Rizin's reason, not just "no
+        // output" (which a pipe to Rizin before 0.10 still says, but with the
+        // reason attached).
+        let err = s
+            .call("disassemble", json!({ "at": "0xdeadbeef" }))
+            .await
+            .expect_err("unmapped");
+        assert!(matches!(err.code.0, -32001 | -32602), "{t:?}: {err:?}");
+        assert!(
+            err.message.contains("Failed to read") && err.message.contains("0xdeadbeef"),
+            "{t:?}: {}",
+            err.message
+        );
+
+        // `plf` fails silently where there is no function; the tool says so.
+        let err = s
+            .call("il_function", json!({ "at": "0x0" }))
+            .await
+            .expect_err("no function");
+        assert!(
+            err.message.contains("no function"),
+            "{t:?}: {}",
+            err.message
+        );
+
+        // A missing signature file is not "Found 0 FLIRT signatures".
+        let err = s
+            .call("flirt_apply", json!({ "path": "/nonexistent.sig" }))
+            .await
+            .expect_err("missing file");
+        assert!(
+            err.message.contains("file not found"),
+            "{t:?}: {}",
+            err.message
+        );
+
+        // Signatures made from this binary match it again.
+        s.ok("flirt_create", json!({ "path": pat })).await;
+        let applied = s.ok("flirt_apply", json!({ "path": pat })).await;
+        assert!(
+            applied["matched_functions"].as_u64().unwrap() > 0,
+            "{t:?}: {applied}"
+        );
+
+        // A sigdb filter may contain `@` and other shell characters.
+        let r = s
+            .ok("flirt_apply_sigdb", json!({ "filter": "x86@64;px" }))
+            .await;
+        assert_eq!(r["matched_functions"], 0, "{t:?}: {r}");
+
+        // A missing engine is skipped; one that fails is reported, not
+        // retried with the next engine under a misleading "install" hint.
+        let d = s
+            .call("decompile", json!({ "at": "main" }))
+            .await
+            .expect("decompile");
+        let meta = d.structured_content.unwrap();
+        assert_eq!(meta["decompiler"], "pseudo", "{t:?}: {meta}");
+        let err = s
+            .call("decompile", json!({ "at": "0x0", "decompiler": "pseudo" }))
+            .await
+            .expect_err("no function");
+        assert_eq!(err.code.0, -32001, "{t:?}: {err:?}");
+        assert!(err.message.contains("function"), "{t:?}: {}", err.message);
+    }
+    let _ = std::fs::remove_file(&pat);
+}

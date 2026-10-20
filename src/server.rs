@@ -307,6 +307,27 @@ impl RizinServer {
         Ok(())
     }
 
+    /// Whether a function covers the location of `suffix` (an `at_suffix`).
+    async fn has_function(&self, suffix: &str) -> bool {
+        self.manager
+            .cmdj(&format!("afij{suffix}"))
+            .await
+            .is_ok_and(|v| v.as_array().is_some_and(|a| !a.is_empty()))
+    }
+
+    /// The number of flags in the `flirt` flag space, which FLIRT matches
+    /// create.
+    async fn flirt_flag_count(&self) -> Result<u64, ErrorData> {
+        let spaces = self.cmdj_optional("fslj", json!([])).await?;
+        Ok(spaces
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some("flirt"))
+            .and_then(|s| s.get("count").and_then(Value::as_u64))
+            .unwrap_or(0))
+    }
+
     /// Map a missing plugin command to a hint naming the plugin.
     fn plugin_hint(e: RizinError, hint: &str) -> ErrorData {
         match e {
@@ -754,22 +775,47 @@ impl RizinServer {
             }
         };
 
+        // Only a missing plugin (or an empty result) moves on to the next
+        // engine: an engine that ran and failed (e.g. no function there) would
+        // fail the same way in the next one, and a timeout or dead session
+        // must not be retried.
+        let mut skipped = serde_json::Map::new();
         for (engine, cmd) in &candidates {
-            match self.manager.cmd(cmd).await {
-                Ok(out) if !out.trim().is_empty() => {
-                    return Ok(self.text_result_meta(out, json!({ "decompiler": engine })));
+            let out = self.manager.exec(cmd).await.mcp()?;
+            match crate::backend::check(cmd, out) {
+                Ok(out) if !out.output.trim().is_empty() => {
+                    return Ok(self.text_result_meta(
+                        out.output,
+                        json!({ "decompiler": engine, "skipped": skipped }),
+                    ));
                 }
-                Ok(_) => {} // empty: plugin missing or nothing to show, try next
-                Err(e @ (RizinError::NoFileOpen | RizinError::SessionClosed)) => {
-                    return Err(e.to_error_data());
+                // A pipe to Rizin before 0.10 sees a failure only as no output
+                // and an error message.
+                Ok(out) if out.messages.iter().any(|m| m.starts_with("ERROR")) => {
+                    return Err(RizinError::CommandFailed {
+                        cmd: cmd.clone(),
+                        status: out.status,
+                        detail: out.detail(),
+                    }
+                    .to_error_data());
                 }
-                Err(_) => {}
+                Ok(_) => {
+                    skipped.insert(engine.to_string(), json!("no output"));
+                }
+                Err(RizinError::CommandFailed {
+                    status: CmdStatus::NonExistingCmd,
+                    ..
+                }) => {
+                    skipped.insert(engine.to_string(), json!("not installed"));
+                }
+                Err(e) => return Err(e.to_error_data()),
             }
         }
 
-        let hint = if which == "auto" || which == "ghidra" || which == "jsdec" {
-            "no decompiler output. Install the rz-ghidra (pdg) or jsdec (pdd) plugin, or use \
-             decompiler=\"pseudo\"."
+        let missing = skipped.values().any(|v| v == "not installed");
+        let hint = if missing {
+            "no decompiler output: the requested engine is not installed. Install the \
+             rz-ghidra (pdg) or jsdec (pdd) plugin, or use decompiler=\"pseudo\"."
         } else {
             "no decompiler output for the function at this location."
         };
@@ -1135,40 +1181,76 @@ impl RizinServer {
     #[tool(
         description = "Apply FLIRT signatures from Rizin's signature database (sigdb) to the \
         loaded binary, naming matched library functions. An optional filter narrows which \
-        signatures are tried (Fa)."
+        signature files are tried. Returns the number of matched functions and the files \
+        applied (Fa)."
     )]
     async fn flirt_apply_sigdb(
         &self,
         Parameters(p): Parameters<FlirtSigdbParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        // The filter is a substring of the signature files' sigdb paths
+        // (e.g. `elf/x86/64`), so it is quoted rather than path-checked.
         let cmd = match &p.filter {
-            Some(f) => format!("Fa {}", validate_path(f).mcp()?),
+            Some(f) => format!("Fa {}", quote_arg(f).mcp()?),
             None => "Fa".to_string(),
         };
+        let before = self.flirt_flag_count().await?;
         let out = self.manager.cmd(&cmd).await.mcp()?;
-        Ok(self.text_result(if out.trim().is_empty() {
-            "Applied sigdb signatures (no new matches reported).".to_string()
-        } else {
-            out
-        }))
+        let applied = self.flirt_flag_count().await?.saturating_sub(before);
+        let files: Vec<&str> = out
+            .lines()
+            .filter_map(|l| l.strip_prefix("Applying "))
+            .collect();
+        Ok(self.json_result(json!({
+            "matched_functions": applied,
+            "signature_files": files,
+        })))
     }
 
     /// Apply a FLIRT signature file (`Fs`).
     #[tool(
-        description = "Open a FLIRT signature file (.sig or .pat) and apply its signatures to \
-        the loaded binary, naming matched functions (Fs)."
+        description = "Open a FLIRT signature file (.sig or .pat; a glob is accepted) and apply \
+        its signatures to the loaded binary, naming matched functions. Returns the number of \
+        matched functions (Fs)."
     )]
     async fn flirt_apply(
         &self,
         Parameters(p): Parameters<FlirtFileParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let path = validate_path(&p.path).mcp()?;
-        let out = self.manager.cmd(&format!("Fs {path}")).await.mcp()?;
-        Ok(self.text_result(if out.trim().is_empty() {
-            format!("Applied FLIRT signatures from {path}.")
-        } else {
-            out
-        }))
+        // `Fs` takes a glob; a plain path must exist.
+        if !path.contains(['*', '?', '[']) && !std::path::Path::new(&path).is_file() {
+            return Err(RizinError::FileNotFound(path).to_error_data());
+        }
+        let cmd = format!("Fs {path}");
+        let out = self.manager.exec(&cmd).await.mcp()?;
+        let out = crate::backend::check(&cmd, out).mcp()?;
+        // `Fs` reports success even when it cannot read a file, saying so only
+        // in an error message.
+        let errors: Vec<&str> = out
+            .messages
+            .iter()
+            .map(String::as_str)
+            .filter(|m| m.starts_with("ERROR"))
+            .collect();
+        if !errors.is_empty() {
+            return Err(RizinError::CommandFailed {
+                cmd,
+                status: CmdStatus::Error,
+                detail: errors.join("\n"),
+            }
+            .to_error_data());
+        }
+        let matched = out
+            .output
+            .split_whitespace()
+            .nth(1)
+            .and_then(|n| n.parse::<u64>().ok());
+        Ok(self.json_result(json!({
+            "path": path,
+            "matched_functions": matched,
+            "output": out.output.trim(),
+        })))
     }
 
     /// Dump a FLIRT signature file (`Fd`).
@@ -1274,13 +1356,30 @@ impl RizinServer {
         Parameters(p): Parameters<AtParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let suffix = at_suffix(&p.at).mcp()?;
-        let out = self.manager.cmd(&format!("plf{suffix}")).await.mcp()?;
-        if out.trim().is_empty() {
-            return Err(RizinError::EmptyJson {
-                cmd: "plf".into(),
-                detail: String::new(),
+        let cmd = format!("plf{suffix}");
+        // `plf` fails without saying why (and before Rizin 0.10, a pipe only
+        // sees no output); the usual reason is that there is no function.
+        let no_function = || {
+            RizinError::InvalidArgument {
+                arg: p.at.clone().unwrap_or_else(|| "the current seek".into()),
+                reason: "no function there (analyze it first, e.g. with analyze_function)".into(),
             }
-            .to_error_data());
+            .to_error_data()
+        };
+        let out = match self.manager.cmd(&cmd).await {
+            Ok(out) => out,
+            Err(RizinError::CommandFailed { detail, .. })
+                if detail.is_empty() && !self.has_function(&suffix).await =>
+            {
+                return Err(no_function());
+            }
+            Err(e) => return Err(e.to_error_data()),
+        };
+        if out.trim().is_empty() {
+            if !self.has_function(&suffix).await {
+                return Err(no_function());
+            }
+            return Err(RizinError::EmptyOutput { cmd }.to_error_data());
         }
         Ok(self.text_result(out))
     }
