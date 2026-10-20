@@ -129,6 +129,14 @@ produces the full listing, which the server then slices.
   understood so later disassembly and decompilation show it. Each returns
   the state Rizin stored, and fails when Rizin only logs an error.
 
+**Keeping the work**
+- `export_annotations` — the renames, comments, flags, signatures and byte
+  writes made through the tools since the file was opened, as a Rizin script
+  (also after `close_file`); replay it with `. <script>` on the same binary.
+- `save_project` — save the session as a Rizin project (`.rzdb`, reopened with
+  `rizin -p`); writes a file, so it needs `--allow-write`. Bytes written to a
+  file opened with `write: true` go to the file directly.
+
 **Writing** (disabled by default — see *Security*)
 - `write_hex`, `write_string`, `write_assembly` (instructions separated by `;`
   or newlines, assembled for the destination address). Every write is read

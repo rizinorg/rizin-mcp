@@ -248,6 +248,13 @@ pub struct SetSignatureParams {
     pub signature: String,
 }
 
+/// Parameters for `save_project`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SaveProjectParams {
+    /// Where to write the Rizin project (`.rzdb`), e.g. `/tmp/sample.rzdb`.
+    pub path: String,
+}
+
 /// Parameters for `write_hex` (write mode only).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteHexParams {
