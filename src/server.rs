@@ -740,7 +740,8 @@ impl RizinServer {
     #[tool(
         description = "Decompile the function at a location to pseudo-C. `decompiler` selects \
         the engine: `auto` (default) tries rz-ghidra (pdg), then jsdec (pdd), then built-in \
-        pseudo-disassembly; or force `ghidra`, `jsdec`, or `pseudo`. rz-ghidra and jsdec are \
+        pseudo-disassembly of the function's basic blocks (pdr); or force `ghidra`, `jsdec`, \
+        or `pseudo`. rz-ghidra and jsdec are \
         optional plugins; see `decompilers` for what is installed. The engine actually used is \
         reported in structuredContent."
     )]
@@ -754,11 +755,14 @@ impl RizinServer {
         // (engine name, command) candidates for each selection.
         let ghidra = ("ghidra", format!("pdg{suffix}"));
         let jsdec = ("jsdec", format!("pdd{suffix}"));
-        // Pseudo-disassembly of the whole function, via a temporary eval so the
-        // global `asm.pseudo` setting is left untouched.
+        // Pseudo-disassembly of the whole function, with temporary evals so the
+        // global settings are left untouched. Without the jump arrows
+        // (`asm.lines`), which Rizin omits from captured in-process output, the
+        // text is the same on both backends. `pdr` walks the basic blocks:
+        // `pdf` spends seconds per pointer operand in a large function.
         let pseudo = (
             "pseudo",
-            format!("pdf @e:asm.pseudo=true{}", at_suffix(&p.at).mcp()?),
+            format!("pdr @e:asm.pseudo=true @e:asm.lines=false{suffix}"),
         );
 
         let candidates: Vec<(&str, String)> = match which.as_str() {

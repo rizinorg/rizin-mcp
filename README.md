@@ -26,7 +26,9 @@ The server can talk to Rizin two ways, selected with `--transport`:
 | Run needs | nothing external | a `rizin` **binary** |
 | Hard-cancel a stuck command | No (in-process C call can't be force-killed) | Yes (the process is killed on timeout) |
 
-Both run the exact same Rizin commands and return identical JSON. On this
+Both run the exact same Rizin commands and return identical JSON. Plain-text
+disassembly through the raw `command` tool can differ in one respect: Rizin
+omits the jump arrows (`asm.lines`) from output captured in process. On this
 machine, opening `/bin/ls` and issuing commands measured roughly:
 
 ```
@@ -135,11 +137,12 @@ produces the full listing, which the server then slices.
 
 ### Notes on a few tools
 
-- **Decompilation.** Rizin 0.9 has no bundled C decompiler. `decompile` uses
+- **Decompilation.** Rizin has no bundled C decompiler. `decompile` uses
   whichever decompiler plugin is installed — rz-ghidra (`pdg`) or jsdec (`pdd`) —
-  and otherwise falls back to built-in pseudo-disassembly (an `asm.pseudo`
-  rendering of the function, applied via a temporary eval so no global state
-  changes). `decompiler` can force `ghidra`, `jsdec`, or `pseudo`; `decompilers`
+  and otherwise falls back to built-in pseudo-disassembly: an `asm.pseudo`
+  rendering of the function's basic blocks (`pdr`), without jump arrows, via
+  temporary evals so no global state changes. That text is identical on both
+  backends. `decompiler` can force `ghidra`, `jsdec`, or `pseudo`; `decompilers`
   reports what is available. See *External plugins* below.
 - **FLIRT.** The `flirt_*` tools wrap Rizin's built-in `F` command family:
   `flirt_list`/`flirt_apply_sigdb` work against the signature database (sigdb)
