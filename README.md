@@ -144,7 +144,9 @@ produces the full listing, which the server then slices.
 - **FLIRT.** The `flirt_*` tools wrap Rizin's built-in `F` command family:
   `flirt_list`/`flirt_apply_sigdb` work against the signature database (sigdb)
   shipped with Rizin, while `flirt_apply`/`flirt_dump`/`flirt_create` work with
-  individual `.sig`/`.pat` files. (`function_signature_bytes` is unrelated to
+  individual `.sig`/`.pat` files. The two apply tools return how many functions
+  the signatures named; a missing file is an error, even though Rizin's `Fs`
+  itself reports success for it. (`function_signature_bytes` is unrelated to
   FLIRT — it just returns a function's masked byte pattern.)
 - **Silhouette.** `silhouette`/`silhouette_test` drive the
   [rz-silhouette](https://github.com/rizinorg/rz-silhouette) plugin's `sil`

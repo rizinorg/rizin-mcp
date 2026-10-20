@@ -341,7 +341,9 @@ pub struct FlirtFileParams {
 /// Parameters for `flirt_apply_sigdb`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct FlirtSigdbParams {
-    /// Optional filter to select a subset of signatures from the sigdb.
+    /// Optional filter selecting the signature files whose sigdb path contains
+    /// it (e.g. `elf/x86/64` or `libc`); without one, the files matching the
+    /// binary's format, architecture, and bits are applied.
     #[serde(default)]
     pub filter: Option<String>,
 }
