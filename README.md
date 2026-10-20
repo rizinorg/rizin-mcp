@@ -125,6 +125,11 @@ to a text rendering, so clients can parse results directly.
   command, which fetches symbols/hints from a Rizin Silhouette server. It needs
   the plugin installed and `silhouette.{enable,host,port,psk}` configured (set
   them via the `command` tool or a `.rizinrc`).
+- **`search_rop`** takes `;`-separated instructions (`pop rdi; ret`) and
+  returns the gadgets containing them in order, each as a substring of an
+  instruction, possibly with other instructions in between — the semantics of
+  Rizin's `/R` filter. `exact: true` keeps only the gadgets made of exactly
+  those instructions.
 - **`search_magic`** needs Rizin's magic database from its data dir. With a
   normally-installed `rizin` (pipe backend, or the `api` backend when the data
   dir is found) it works; on a bare embedded core it returns an empty list.

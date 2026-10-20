@@ -308,3 +308,33 @@ async fn end_to_end_status_and_messages() {
         }
     }
 }
+
+async fn quoting_is_verbatim(mgr: &SessionManager, transport: Transport) {
+    // Whatever text is quoted reaches the command unchanged.
+    for text in [
+        "plain",
+        "semi;colon | pipe > gt @ at ~tilde #hash",
+        r#"quote " and backslash \ and \" both"#,
+        "dollar $sp $(echo sub) and `echo bt` backticks",
+        "trailing backslash \\",
+        "",
+    ] {
+        let q = rizin_mcp::util::quote_arg(text).expect("quote");
+        let out = mgr.cmd(&format!("echo {q}")).await.expect("echo");
+        assert_eq!(
+            out.strip_suffix('\n').unwrap_or(&out),
+            text,
+            "{transport:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn end_to_end_quoting_is_verbatim() {
+    for t in transports() {
+        if let Some(mgr) = open_or_skip(t, AnalysisLevel::None).await {
+            eprintln!("running quoting_is_verbatim on {t:?}");
+            quoting_is_verbatim(&mgr, t).await;
+        }
+    }
+}

@@ -40,6 +40,8 @@ cc = "1.2"
 
 [dev-dependencies]
 proptest = "1.11.0"
+# The MCP-level tests drive the server through a real rmcp client.
+rmcp = { version = "1.8.0", features = ["client", "server", "transport-io"] }
 
 [features]
 # The `api` backend links Rizin's C libraries (librz_core et al.) and runs

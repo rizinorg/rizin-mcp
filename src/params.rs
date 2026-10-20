@@ -198,8 +198,14 @@ pub struct SearchValueParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchRopParams {
     /// Gadget to look for, as one or more `;`-separated instructions, e.g.
-    /// `pop rdi; ret` or `pop rdi`.
+    /// `pop rdi; ret` or `pop rdi`. Each instruction matches as a substring
+    /// (`pop r` matches `pop rdi`), in order; other instructions may come in
+    /// between unless `exact` is set.
     pub query: String,
+    /// Only return gadgets made of exactly these instructions, in this order,
+    /// each matching in full (ignoring case and spacing). Defaults to `false`.
+    #[serde(default)]
+    pub exact: Option<bool>,
 }
 
 // --- Diffing ---------------------------------------------------------------
