@@ -483,3 +483,42 @@ async fn output_ceiling_applies_to_every_result() {
         assert!(text.contains("output limit"), "{t:?}: {text}");
     }
 }
+
+#[tokio::test]
+async fn disabled_tools_are_not_offered() {
+    #[cfg(feature = "api")]
+    let transport = Transport::Api;
+    #[cfg(not(feature = "api"))]
+    let transport = Transport::Pipe;
+    let s = Session::start(transport, |c| {
+        c.allow_raw = false;
+        c.allow_write = false;
+        c.allow_debug = false;
+    })
+    .await;
+    let names: Vec<String> = s
+        .client
+        .list_all_tools()
+        .await
+        .expect("tools/list")
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    for hidden in [
+        "command",
+        "command_json",
+        "write_hex",
+        "flirt_create",
+        "debug_start",
+    ] {
+        assert!(!names.iter().any(|n| n == hidden), "{hidden} is offered");
+    }
+    assert!(names.iter().any(|n| n == "list_functions"));
+    // Calling one anyway is refused.
+    let err = s
+        .call("command", json!({ "command": "echo hi" }))
+        .await
+        .expect_err("command must not run");
+    assert_eq!(err.code.0, -32602, "{err:?}");
+    assert!(err.message.contains("not found"), "{err:?}");
+}

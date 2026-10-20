@@ -319,6 +319,12 @@ Two capabilities are gated:
   can be force-killed if it hangs), whereas the in-process `api` backend shares
   the server's file descriptors and cannot hard-cancel a wedged debuggee.
 
+A tool whose capability is disabled is left out of `tools/list` altogether
+(and refused if called anyway), so clients do not offer or try it: the raw
+tools with `--no-raw`, the write tools (including `flirt_create`, which
+writes a file) without `--allow-write`, and the `debug_*` tools without
+`--allow-debug`.
+
 Addresses and flag names passed to tools are validated against a strict
 character set, and every command is checked for the NUL byte (and, for the pipe
 backend, the newline) that would corrupt command framing, to avoid command
