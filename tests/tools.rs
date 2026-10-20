@@ -602,3 +602,49 @@ async fn errors_say_what_went_wrong() {
     }
     let _ = std::fs::remove_file(&pat);
 }
+
+#[tokio::test]
+async fn pseudo_decompile_is_the_same_on_both_backends() {
+    let backends = transports();
+    if backends.len() < 2 {
+        eprintln!("skipping: needs both backends");
+        return;
+    }
+    let mut texts: Vec<Vec<String>> = Vec::new();
+    for t in &backends {
+        let s = Session::start(*t, |_| {}).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+        // `main`, `entry0`, and a few more of the larger functions.
+        let funcs = s.items("list_functions", json!({ "limit": 1000 })).await;
+        let mut sized: Vec<(u64, u64)> = funcs
+            .iter()
+            .filter_map(|f| Some((f["size"].as_u64()?, f["offset"].as_u64()?)))
+            .collect();
+        sized.sort_unstable_by(|a, b| b.cmp(a));
+        let mut at: Vec<String> = vec!["main".into(), "entry0".into()];
+        at.extend(sized.iter().take(3).map(|(_, o)| format!("0x{o:x}")));
+        let mut out = Vec::new();
+        for a in &at {
+            let started = std::time::Instant::now();
+            let r = s
+                .call("decompile", json!({ "at": a, "decompiler": "pseudo" }))
+                .await
+                .unwrap_or_else(|e| panic!("{t:?} {a}: {e:?}"));
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "{t:?} {a}: took {:?}",
+                started.elapsed()
+            );
+            out.push(r.content[0].as_text().unwrap().text.clone());
+        }
+        texts.push(out);
+    }
+    for (i, (a, b)) in texts[0].iter().zip(&texts[1]).enumerate() {
+        assert!(!a.trim().is_empty());
+        assert_eq!(a, b, "function #{i} differs between backends");
+    }
+}
