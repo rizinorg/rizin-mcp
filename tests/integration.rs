@@ -14,8 +14,10 @@
 //!   when one cannot be launched. Point `RIZIN_MCP_TEST_BINARY` at a `rizin`
 //!   executable (or put one on `PATH`) to enable it.
 
+use rizin_mcp::RizinError;
 use rizin_mcp::config::{ServerConfig, Transport};
 use rizin_mcp::session::{AnalysisLevel, SessionManager};
+use rizin_mcp::status::CmdStatus;
 
 /// The transports to exercise: the in-process API (when compiled in) and the
 /// spawned-process pipe.
@@ -209,6 +211,76 @@ async fn end_to_end_analysis_and_search() {
         if let Some(mgr) = open_or_skip(t, AnalysisLevel::Basic).await {
             eprintln!("running analysis_and_search on {t:?}");
             analysis_and_search(&mgr).await;
+        }
+    }
+}
+
+async fn status_and_messages(mgr: &SessionManager, transport: Transport) {
+    // A successful command reports OK (or Unknown before Rizin 0.10) and no
+    // diagnostics.
+    let ok = mgr.exec("p8 4 @ 0").await.expect("p8");
+    assert!(!ok.status.is_failure(), "{transport:?}: {:?}", ok.status);
+    assert!(ok.messages.is_empty(), "{transport:?}: {:?}", ok.messages);
+
+    // A plugin command that is not installed fails with its reason, instead
+    // of looking like an empty success.
+    let missing = mgr
+        .exec("pdzzz")
+        .await
+        .expect("a failing command is not a transport error");
+    // Before Rizin 0.10 the pipe cannot tell and the in-process API only
+    // knows that the command failed.
+    match missing.status {
+        CmdStatus::Unknown | CmdStatus::Failed => {}
+        s => assert_eq!(s, CmdStatus::NonExistingCmd, "{transport:?}"),
+    }
+    assert!(
+        missing.detail().contains("does not exist"),
+        "{transport:?}: {:?}",
+        missing.messages
+    );
+    match mgr.cmd("pdzzz").await {
+        Err(RizinError::CommandFailed { status, detail, .. }) => {
+            assert!(status.is_failure());
+            assert!(detail.contains("does not exist"), "{transport:?}: {detail}");
+        }
+        other if missing.status == CmdStatus::Unknown => {
+            eprintln!("{transport:?}: no status reporting, got {other:?}")
+        }
+        other => panic!("{transport:?}: expected CommandFailed, got {other:?}"),
+    }
+
+    // A chained line keeps what was printed before the failing statement, but
+    // the line as a whole failed.
+    let chained = mgr.exec("p8 1 @ 0; pdzzz").await.expect("exec");
+    // `rz_core_cmd_str()` of Rizin before 0.10 drops the output of a failed
+    // line, so the output is checked only where the status is reported.
+    let reports_status = mgr
+        .exec("_s?")
+        .await
+        .is_ok_and(|o| o.status == CmdStatus::Ok);
+    if reports_status {
+        assert!(
+            chained.output.trim().len() == 2,
+            "{transport:?}: {:?}",
+            chained.output
+        );
+    }
+    if chained.status != CmdStatus::Unknown {
+        assert!(chained.status.is_failure(), "{transport:?}");
+        assert!(matches!(
+            mgr.cmdj("ij; pdzzz").await,
+            Err(RizinError::CommandFailed { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn end_to_end_status_and_messages() {
+    for t in transports() {
+        if let Some(mgr) = open_or_skip(t, AnalysisLevel::None).await {
+            eprintln!("running status_and_messages on {t:?}");
+            status_and_messages(&mgr, t).await;
         }
     }
 }

@@ -29,6 +29,7 @@
 //! * [`pipe`] — the low-level async Rizin pipe ([`pipe::RizinPipe`]).
 //! * `ffi`/`rzcore` — the in-process C backend (only with the `api` feature).
 //! * [`session`] — session/lifecycle management ([`session::SessionManager`]).
+//! * [`status`] — command status and diagnostics reported by Rizin.
 //! * [`params`] — typed tool-parameter structs (with JSON schemas).
 //! * [`server`] — the MCP server and all tools/resources/prompts
 //!   ([`server::RizinServer`]).
@@ -47,6 +48,7 @@ pub mod pipe;
 pub mod rzcore;
 pub mod server;
 pub mod session;
+pub mod status;
 pub mod util;
 
 pub use config::ServerConfig;

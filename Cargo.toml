@@ -32,6 +32,12 @@ tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "io-std",
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.180"
+
+[build-dependencies]
+cc = "1.2"
+
 [dev-dependencies]
 proptest = "1.11.0"
 

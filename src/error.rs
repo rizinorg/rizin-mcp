@@ -3,6 +3,14 @@
 //! Error type for the crate and its mapping onto MCP protocol errors.
 
 use rmcp::ErrorData;
+use rmcp::model::ErrorCode;
+use serde_json::json;
+
+use crate::status::CmdStatus;
+
+/// JSON-RPC error code (server-defined range) for a Rizin command that ran and
+/// reported a failure, as opposed to invalid tool arguments.
+pub const COMMAND_FAILED: ErrorCode = ErrorCode(-32001);
 
 /// All errors that can arise while talking to Rizin or validating input.
 #[derive(Debug, thiserror::Error)]
@@ -69,11 +77,24 @@ pub enum RizinError {
         reason: String,
     },
 
-    /// A JSON command returned no output.
-    #[error("rizin returned no output for a command expecting JSON: {cmd}")]
+    /// A JSON command succeeded but printed nothing.
+    #[error("rizin returned no output for a command expecting JSON: {cmd}{}", fmt_detail(.detail))]
     EmptyJson {
         /// The command that produced no JSON.
         cmd: String,
+        /// Diagnostics Rizin printed meanwhile, possibly empty.
+        detail: String,
+    },
+
+    /// Rizin ran the command and reported that it failed.
+    #[error("rizin command failed ({status}): {cmd}{}", fmt_detail(.detail))]
+    CommandFailed {
+        /// The command line.
+        cmd: String,
+        /// The status Rizin reported.
+        status: CmdStatus,
+        /// Diagnostics Rizin printed while running it, possibly empty.
+        detail: String,
     },
 
     /// A JSON command returned output that could not be parsed.
@@ -97,13 +118,32 @@ pub enum RizinError {
     FileNotFound(String),
 }
 
+/// Render diagnostics after the main error message.
+fn fmt_detail(detail: &str) -> String {
+    if detail.is_empty() {
+        String::new()
+    } else {
+        format!("\n{detail}")
+    }
+}
+
 impl RizinError {
     /// Convert into an MCP [`ErrorData`], choosing a sensible JSON-RPC error
-    /// class: user/input problems map to `invalid_params`, everything else to
-    /// `internal_error`.
+    /// class: user/input problems map to `invalid_params`, a failure reported
+    /// by Rizin to [`COMMAND_FAILED`] (with the status in `data`), everything
+    /// else to `internal_error`.
     pub fn to_error_data(&self) -> ErrorData {
         use RizinError::*;
         match self {
+            CommandFailed {
+                cmd,
+                status,
+                detail,
+            } => ErrorData::new(
+                COMMAND_FAILED,
+                self.to_string(),
+                Some(json!({ "command": cmd, "status": status, "detail": detail })),
+            ),
             NoFileOpen
             | SessionClosed
             | InvalidArgument { .. }
@@ -126,5 +166,40 @@ pub trait IntoMcp<T> {
 impl<T> IntoMcp<T> for Result<T, RizinError> {
     fn mcp(self) -> Result<T, ErrorData> {
         self.map_err(|e| e.to_error_data())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_failure_has_its_own_code_and_data() {
+        let e = RizinError::CommandFailed {
+            cmd: "wa \"bogus\" @ 0x50".into(),
+            status: CmdStatus::Error,
+            detail: "ERROR: Cannot assemble 'bogus'".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "rizin command failed (ERROR): wa \"bogus\" @ 0x50\nERROR: Cannot assemble 'bogus'"
+        );
+        let data = e.to_error_data();
+        assert_eq!(data.code, COMMAND_FAILED);
+        let extra = data.data.expect("data");
+        assert_eq!(extra["status"], "ERROR");
+        assert_eq!(extra["command"], "wa \"bogus\" @ 0x50");
+    }
+
+    #[test]
+    fn empty_json_without_detail_keeps_the_old_message() {
+        let e = RizinError::EmptyJson {
+            cmd: "ij".into(),
+            detail: String::new(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "rizin returned no output for a command expecting JSON: ij"
+        );
     }
 }
