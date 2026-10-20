@@ -866,3 +866,70 @@ async fn work_can_be_exported_and_saved() {
         let _ = std::fs::remove_file(&project);
     }
 }
+
+#[tokio::test]
+async fn function_summary_aggregates_in_one_call() {
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+        let started = std::time::Instant::now();
+        let r = s
+            .ok("function_summary", json!({ "at": "main", "max_items": 5 }))
+            .await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "{t:?}: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(r["name"], "main", "{t:?}: {r}");
+        assert!(r["signature"].as_str().unwrap().contains("main"), "{t:?}");
+        assert!(r["blocks"].as_u64().unwrap() > 1, "{t:?}");
+        for list in ["callers", "callees", "strings"] {
+            let items = r[list]["items"].as_array().unwrap();
+            assert!(items.len() <= 5, "{t:?}: {list}");
+            assert!(
+                r[list]["total"].as_u64().unwrap() >= items.len() as u64,
+                "{t:?}: {list}"
+            );
+        }
+        assert!(
+            r["callees"]["total"].as_u64().unwrap() > 5,
+            "{t:?}: main calls many functions"
+        );
+        assert!(
+            !r["callees"]["items"][0]["name"]
+                .as_str()
+                .unwrap()
+                .is_empty(),
+            "{t:?}"
+        );
+        // The strings come from the string table, not from re-guessing the
+        // encoding at the reference (which turned ASCII into UTF-16 garbage).
+        let strings: Vec<&str> = r["strings"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["string"].as_str().unwrap())
+            .collect();
+        assert!(strings.iter().any(|s| !s.is_empty()), "{t:?}: {strings:?}");
+        assert!(strings.iter().all(|s| s.is_ascii()), "{t:?}: {strings:?}");
+        let snippet = &r["decompiled"];
+        assert_eq!(snippet["engine"], "pseudo", "{t:?}: {snippet}");
+        assert!(snippet["text"].as_str().unwrap().lines().count() <= 30);
+        assert!(snippet["total_lines"].as_u64().unwrap() > 30, "{t:?}");
+
+        let err = s
+            .call("function_summary", json!({ "at": "0x0" }))
+            .await
+            .expect_err("no function");
+        assert!(
+            err.message.contains("no function"),
+            "{t:?}: {}",
+            err.message
+        );
+    }
+}

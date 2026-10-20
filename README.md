@@ -85,6 +85,8 @@ produces the full listing, which the server then slices.
 
 **Analysis & functions**
 - `list_functions`, `function_info`, `function_variables`, `analyze_function`
+- `function_summary` — one call for a function's name, size, signature,
+  callers, callees, referenced strings, and the start of its decompilation
 - `xrefs_to`, `xrefs_from`, `function_graph`
 
 **Disassembly & decompilation**
