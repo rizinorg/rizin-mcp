@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::service::RequestContext;
@@ -62,17 +63,62 @@ Dynamic analysis is available via the `debug_*` tools when the server is started
 sym.imp.printf). For anything not covered by a dedicated tool, use `command` (text) or \
 `command_json` (parsed JSON) to run a raw Rizin command.";
 
+/// The raw passthrough tools, offered only without `--no-raw`.
+pub const RAW_TOOLS: &[&str] = &["command", "command_json"];
+
+/// The tools that modify the file or write to disk, offered only with
+/// `--allow-write`.
+pub const WRITE_TOOLS: &[&str] = &[
+    "write_hex",
+    "write_string",
+    "write_assembly",
+    "flirt_create",
+];
+
+/// The debugger tools, offered only with `--allow-debug`.
+pub const DEBUG_TOOLS: &[&str] = &[
+    "debug_start",
+    "debug_stop",
+    "debug_continue",
+    "debug_step",
+    "debug_registers",
+    "debug_breakpoint",
+    "debug_breakpoint_remove",
+    "debug_breakpoints",
+    "debug_backtrace",
+    "debug_maps",
+    "debug_status",
+];
+
 /// A Model Context Protocol server backed by a Rizin session.
 #[derive(Clone)]
 pub struct RizinServer {
     manager: Arc<SessionManager>,
+    /// The tools this configuration offers.
+    tool_router: Arc<ToolRouter<Self>>,
 }
 
 impl RizinServer {
     /// Create a server with the given configuration and no open file.
+    ///
+    /// Tools whose capability is disabled are left out of the catalog, so
+    /// clients neither see nor try them; their guards stay as a second line.
     pub fn new(config: ServerConfig) -> Self {
+        let mut router = Self::tool_router();
+        for (enabled, tools) in [
+            (config.allow_raw, RAW_TOOLS),
+            (config.allow_write, WRITE_TOOLS),
+            (config.allow_debug, DEBUG_TOOLS),
+        ] {
+            if !enabled {
+                for name in tools {
+                    router.remove_route(name);
+                }
+            }
+        }
         Self {
             manager: Arc::new(SessionManager::new(config)),
+            tool_router: Arc::new(router),
         }
     }
 
@@ -1615,7 +1661,7 @@ impl RizinServer {
 // Server handler: capabilities, resources, prompts wiring
 // ---------------------------------------------------------------------------
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 #[prompt_handler]
 impl ServerHandler for RizinServer {
     fn get_info(&self) -> ServerInfo {
@@ -1884,6 +1930,61 @@ mod tests {
             serde_json::from_str::<Value>(&text).unwrap(),
             r.structured_content.unwrap()
         );
+    }
+
+    fn listed(config: ServerConfig) -> Vec<String> {
+        RizinServer::new(config)
+            .tool_router
+            .list_all()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn disabled_capabilities_hide_their_tools() {
+        let all = listed(ServerConfig {
+            allow_raw: true,
+            allow_write: true,
+            allow_debug: true,
+            ..Default::default()
+        });
+        let locked = listed(ServerConfig {
+            allow_raw: false,
+            allow_write: false,
+            allow_debug: false,
+            ..Default::default()
+        });
+        for name in RAW_TOOLS.iter().chain(WRITE_TOOLS).chain(DEBUG_TOOLS) {
+            assert!(all.iter().any(|n| n == name), "{name} missing");
+            assert!(!locked.iter().any(|n| n == name), "{name} offered");
+        }
+        assert_eq!(
+            all.len() - locked.len(),
+            RAW_TOOLS.len() + WRITE_TOOLS.len() + DEBUG_TOOLS.len()
+        );
+        // The defaults offer raw commands, but neither writing nor debugging.
+        let default = listed(ServerConfig::default());
+        assert!(default.iter().any(|n| n == "command"));
+        assert!(
+            !default
+                .iter()
+                .any(|n| n == "write_hex" || n == "debug_start")
+        );
+    }
+
+    #[test]
+    fn gated_tool_lists_cover_every_gated_tool() {
+        // A new write_*/debug_* tool must be added to its list.
+        for t in RizinServer::tool_router().list_all() {
+            let name = t.name.as_ref();
+            if name.starts_with("debug_") {
+                assert!(DEBUG_TOOLS.contains(&name), "{name} not in DEBUG_TOOLS");
+            }
+            if name.starts_with("write_") {
+                assert!(WRITE_TOOLS.contains(&name), "{name} not in WRITE_TOOLS");
+            }
+        }
     }
 
     #[tokio::test]
