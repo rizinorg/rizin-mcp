@@ -110,14 +110,28 @@ impl Session {
             "{:?}: {name}: {r:?}",
             self.transport
         );
-        r.structured_content.unwrap_or(Value::Null)
+        let sc = r.structured_content.unwrap_or(Value::Null);
+        assert!(
+            sc.is_object() || sc.is_null(),
+            "{:?}: {name}: structuredContent must be an object: {sc}",
+            self.transport
+        );
+        sc
+    }
+
+    /// Call a listing tool that must succeed and return its items.
+    async fn items(&self, name: &str, args: Value) -> Vec<Value> {
+        let sc = self.ok(name, args).await;
+        sc["items"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{:?}: {name}: no items in {sc}", self.transport))
+            .clone()
     }
 }
 
 /// The gadget addresses of a `search_rop` result.
-fn gadget_starts(v: &Value) -> Vec<u64> {
-    v.as_array()
-        .expect("gadget array")
+fn gadget_starts(gadgets: &[Value]) -> Vec<u64> {
+    gadgets
         .iter()
         .map(|g| g["opcodes"][0]["offset"].as_u64().expect("offset"))
         .collect()
@@ -132,11 +146,15 @@ async fn search_rop_matches_instruction_chains() {
 
         // The chain is matched in order, so every hit has `pop` then `ret`;
         // spaces around `;` do not matter.
-        let spaced = s.ok("search_rop", json!({ "query": "pop rbp; ret" })).await;
-        let tight = s.ok("search_rop", json!({ "query": "pop rbp;ret" })).await;
+        let spaced = s
+            .items("search_rop", json!({ "query": "pop rbp; ret" }))
+            .await;
+        let tight = s
+            .items("search_rop", json!({ "query": "pop rbp;ret" }))
+            .await;
         assert_eq!(spaced, tight, "{t:?}");
         assert!(!gadget_starts(&spaced).is_empty(), "{t:?}: no gadgets");
-        for g in spaced.as_array().unwrap() {
+        for g in &spaced {
             let ops: Vec<&str> = g["opcodes"]
                 .as_array()
                 .unwrap()
@@ -152,7 +170,7 @@ async fn search_rop_matches_instruction_chains() {
         }
 
         // A chain is narrower than its first instruction alone.
-        let first = s.ok("search_rop", json!({ "query": "pop rbp" })).await;
+        let first = s.items("search_rop", json!({ "query": "pop rbp" })).await;
         assert!(
             gadget_starts(&first).len() >= gadget_starts(&spaced).len(),
             "{t:?}"
@@ -160,7 +178,7 @@ async fn search_rop_matches_instruction_chains() {
 
         // Exact gadgets are exactly `pop rbp; ret`, a subset of the chain hits.
         let exact = s
-            .ok(
+            .items(
                 "search_rop",
                 json!({ "query": "pop rbp; ret", "exact": true }),
             )
@@ -170,7 +188,7 @@ async fn search_rop_matches_instruction_chains() {
             gadget_starts(&exact).iter().all(|a| starts.contains(a)),
             "{t:?}"
         );
-        for g in exact.as_array().unwrap() {
+        for g in &exact {
             let ops = g["opcodes"].as_array().unwrap();
             assert_eq!(ops.len(), 2, "{t:?}: {g}");
             assert_eq!(ops[0]["opcode"], "pop rbp");
@@ -180,12 +198,12 @@ async fn search_rop_matches_instruction_chains() {
         // Shell metacharacters stay inside the quoted filter: no gadget
         // contains this text, and no `px` output leaks in.
         let quoted = s
-            .ok(
+            .items(
                 "search_rop",
                 json!({ "query": "ret\"; px 4 $(px 4) `px 4`" }),
             )
             .await;
-        assert_eq!(quoted, json!([]), "{t:?}");
+        assert!(quoted.is_empty(), "{t:?}");
         let err = s
             .call("search_rop", json!({ "query": "pop rdi\nret" }))
             .await
@@ -316,5 +334,53 @@ async fn empty_session_and_open_failures() {
             .await
             .expect_err("a directory");
         assert!(err.message.contains("directory"), "{t:?}: {}", err.message);
+    }
+}
+
+#[tokio::test]
+async fn every_listing_returns_an_object() {
+    // The argument-free read-only tools, plus a few taking a location.
+    let calls = [
+        ("binary_info", json!({})),
+        ("entrypoints", json!({})),
+        ("sections", json!({})),
+        ("segments", json!({})),
+        ("relocations", json!({})),
+        ("imports", json!({})),
+        ("exports", json!({})),
+        ("symbols", json!({})),
+        ("libraries", json!({})),
+        ("classes", json!({})),
+        ("list_strings", json!({ "all": false })),
+        ("list_flags", json!({})),
+        ("flag_spaces", json!({})),
+        ("list_functions", json!({})),
+        ("function_info", json!({ "at": "entry0" })),
+        ("disassemble", json!({ "at": "entry0", "count": 4 })),
+        ("hexdump", json!({ "at": "entry0", "count": 16 })),
+        ("instruction_analysis", json!({ "at": "entry0" })),
+        ("xrefs_to", json!({ "address": "entry0" })),
+        ("xrefs_from", json!({ "address": "entry0" })),
+        ("headers", json!({})),
+        ("header_fields", json!({})),
+        ("signature_info", json!({})),
+        ("version_info", json!({})),
+        ("resources", json!({})),
+        ("hash_algorithms", json!({})),
+        ("decompilers", json!({})),
+        ("search_bytes", json!({ "hex": "7f454c46" })),
+        ("search_value", json!({ "value": "0x464c457f", "size": 4 })),
+    ];
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        s.ok(
+            "open_file",
+            json!({ "path": target(), "analysis": "basic" }),
+        )
+        .await;
+        for (name, args) in &calls {
+            // `ok` asserts that the structured content is an object.
+            s.ok(name, args.clone()).await;
+        }
     }
 }

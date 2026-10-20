@@ -1554,9 +1554,22 @@ impl ServerHandler for RizinServer {
 // Result helpers
 // ---------------------------------------------------------------------------
 
+/// Make `value` a valid `structuredContent`, which MCP requires to be a JSON
+/// object: arrays become `{"items": [...]}`, other non-objects
+/// `{"result": ...}`.
+fn as_structured(value: Value) -> Value {
+    match value {
+        Value::Object(_) => value,
+        Value::Array(_) => json!({ "items": value }),
+        other => json!({ "result": other }),
+    }
+}
+
 /// Build a tool result carrying a JSON value both as pretty text (for clients
 /// that show text) and as structured content (for clients that parse it).
+/// The text is the serialized structured content, as MCP recommends.
 fn json_result(value: Value) -> CallToolResult {
+    let value = as_structured(value);
     let pretty = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
     let mut result = CallToolResult::success(vec![Content::text(pretty)]);
     result.structured_content = Some(value);
@@ -1705,6 +1718,30 @@ mod tests {
         assert_eq!(r.structured_content, Some(json!({"a": 1, "b": [2, 3]})));
         assert_eq!(r.content.len(), 1);
         assert!(r.is_error.is_none() || r.is_error == Some(false));
+    }
+
+    #[test]
+    fn structured_content_is_always_an_object() {
+        // The TypeScript and Python MCP SDKs reject a call result whose
+        // structuredContent is not an object.
+        assert_eq!(
+            json_result(json!([1, 2])).structured_content,
+            Some(json!({"items": [1, 2]}))
+        );
+        assert_eq!(
+            json_result(Value::Null).structured_content,
+            Some(json!({"result": null}))
+        );
+        assert_eq!(
+            json_result(json!("x")).structured_content,
+            Some(json!({"result": "x"}))
+        );
+        let r = json_result(json!([]));
+        let text = r.content[0].as_text().expect("text").text.clone();
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap(),
+            json!({"items": []})
+        );
     }
 
     #[tokio::test]

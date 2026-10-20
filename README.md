@@ -43,7 +43,9 @@ debugger and want a hard timeout that can kill a wedged command.
 ## Features
 
 All tools return structured JSON (via Rizin's `j`-suffixed commands) in addition
-to a text rendering, so clients can parse results directly.
+to a text rendering, so clients can parse results directly. MCP requires
+`structuredContent` to be an object, so a listing comes as
+`{"items": [...]}` and a bare value as `{"result": ...}`.
 
 **Session**
 - `open_file` — open a binary/file or Rizin URI (`malloc://`, `hex://`, …) and run
