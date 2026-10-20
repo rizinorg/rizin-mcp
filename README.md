@@ -408,6 +408,13 @@ into a user prefix — the multiarch layout of the documented install path —
 and builds, lints, starts (without `LD_LIBRARY_PATH`), and tests the server
 against each; it also runs nightly to catch drift on Rizin's `dev` branch.
 
+`tests/contract.rs` pins what the tools rely on from Rizin: every command
+they run must exist (its `?` help is checked), and the JSON fields they read
+must be present with the expected types. Rizin publishes no JSON schemas yet
+(rizinorg/rizin#6543, B2), so a renamed command or field shows up as a
+(nightly) CI failure instead of an empty or wrong result in a session. A test
+also checks that every command found in the tools' code is in that list.
+
 The end-to-end tests run against **both** backends: the in-process `api` backend
 (always available when compiled in) and the `pipe` backend (skipped if a `rizin`
 process can't be launched).
