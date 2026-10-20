@@ -348,6 +348,11 @@ Two capabilities are gated:
   can be force-killed if it hangs), whereas the in-process `api` backend shares
   the server's file descriptors and cannot hard-cancel a wedged debuggee.
 
+Every tool carries MCP safety hints (`readOnlyHint`, `destructiveHint`,
+`idempotentHint`, `openWorldHint`), so clients can tell the queries from the
+tools that change the session, the file, or the world (raw commands and the
+debugger are open-world).
+
 A tool whose capability is disabled is left out of `tools/list` altogether
 (and refused if called anyway), so clients do not offer or try it: the raw
 tools with `--no-raw`, the write and annotation tools (including
