@@ -648,3 +648,33 @@ async fn pseudo_decompile_is_the_same_on_both_backends() {
         assert_eq!(a, b, "function #{i} differs between backends");
     }
 }
+
+#[tokio::test]
+async fn listing_one_flag_space_leaves_the_others_visible() {
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        s.ok("open_file", json!({ "path": target(), "analysis": "none" }))
+            .await;
+        let all = s.ok("list_flags", json!({})).await["total"]
+            .as_u64()
+            .unwrap();
+        let strings = s.ok("list_flags", json!({ "space": "strings" })).await["total"]
+            .as_u64()
+            .unwrap();
+        assert!(strings > 0 && strings < all, "{t:?}: {strings} of {all}");
+        // Before the fix, every later listing was stuck in `strings`.
+        let again = s.ok("list_flags", json!({})).await["total"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(again, all, "{t:?}");
+
+        // An unknown space is empty and is not created.
+        let none = s.ok("list_flags", json!({ "space": "nosuchspace" })).await;
+        assert_eq!(none["total"], 0, "{t:?}");
+        let spaces = s.items("flag_spaces", json!({})).await;
+        assert!(
+            !spaces.iter().any(|sp| sp["name"] == "nosuchspace"),
+            "{t:?}: {spaces:?}"
+        );
+    }
+}
