@@ -54,12 +54,36 @@ fn target() -> String {
         .into_owned()
 }
 
+/// Held while an in-process session is open: Rizin before 0.10 keeps its
+/// console in globals, so two in-process cores must never overlap, as tests
+/// running in parallel would make them.
+#[cfg(feature = "api")]
+static API_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// An open session, holding [`API_LOCK`] when in process.
+struct Opened {
+    mgr: SessionManager,
+    _guard: Option<tokio::sync::MutexGuard<'static, ()>>,
+}
+
+impl std::ops::Deref for Opened {
+    type Target = SessionManager;
+    fn deref(&self) -> &SessionManager {
+        &self.mgr
+    }
+}
+
 /// Open the target on `transport`, or return `None` (with a notice) if that
 /// backend is unavailable.
-async fn open_or_skip(transport: Transport, level: AnalysisLevel) -> Option<SessionManager> {
+async fn open_or_skip(transport: Transport, level: AnalysisLevel) -> Option<Opened> {
+    let guard = match transport {
+        #[cfg(feature = "api")]
+        Transport::Api => Some(API_LOCK.lock().await),
+        _ => None,
+    };
     let mgr = SessionManager::new(config(transport));
     match mgr.open(&target(), level, false).await {
-        Ok(_) => Some(mgr),
+        Ok(_) => Some(Opened { mgr, _guard: guard }),
         Err(e) => {
             eprintln!("skipping {transport:?} integration test (backend unavailable): {e}");
             None

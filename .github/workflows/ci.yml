@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: 2026 RizinOrg <info@rizin.re>
+# SPDX-License-Identifier: LGPL-3.0-or-later
+name: CI
+
+on:
+  push:
+  pull_request:
+  # Nightly, to catch command or API drift on Rizin's dev branch early.
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pipe-only:
+    name: pipe-only build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --no-default-features --all-targets -- -D warnings
+      - run: cargo test --no-default-features
+
+  rizin:
+    # Rizin is installed into a user prefix, the documented install path:
+    # Meson then uses the multiarch lib/x86_64-linux-gnu layout, and nothing
+    # is in the loader's default directories, so the rpath is exercised.
+    name: rizin ${{ matrix.rizin }} (user prefix)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rizin: [dev, v0.9.1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Resolve the Rizin revision
+        id: rev
+        run: |
+          ref=refs/heads/${{ matrix.rizin }}
+          case "${{ matrix.rizin }}" in v*) ref=refs/tags/${{ matrix.rizin }} ;; esac
+          echo "sha=$(git ls-remote https://github.com/rizinorg/rizin "$ref" | head -1 | cut -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: ~/.local/rizin
+          key: rizin-${{ runner.os }}-${{ matrix.rizin }}-${{ steps.rev.outputs.sha }}
+      - name: Build and install Rizin
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          pipx install meson
+          git clone --depth 1 --branch "${{ matrix.rizin }}" https://github.com/rizinorg/rizin
+          cd rizin
+          meson setup build --buildtype=release --prefix="$HOME/.local/rizin"
+          ninja -C build install
+      - name: Point the build at the install
+        run: |
+          pc=$(dirname "$(find "$HOME/.local/rizin" -name rz_core.pc | head -1)")
+          echo "PKG_CONFIG_PATH=$pc" >> "$GITHUB_ENV"
+          echo "RIZIN_MCP_TEST_BINARY=$HOME/.local/rizin/bin/rizin" >> "$GITHUB_ENV"
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --release
+      - name: Start without LD_LIBRARY_PATH
+        run: ./target/release/rizin-mcp --version
+      - run: cargo test
