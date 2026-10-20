@@ -123,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let transport_mode = config.transport.clone();
+    let transport_mode = config.transport;
     let server = RizinServer::new(config);
 
     if let Some(file) = cli.file.as_deref() {
