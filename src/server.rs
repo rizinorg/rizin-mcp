@@ -26,8 +26,8 @@ use crate::session::{AnalysisLevel, SessionManager};
 use crate::status::CmdStatus;
 use crate::util::{
     at_suffix, clamp_count, gadget_matches_exactly, parse_hex_bytes, parse_instructions,
-    parse_rop_query, quote_arg, to_hex, validate_algo, validate_location, validate_number,
-    validate_path,
+    parse_rop_query, quote_arg, to_hex, validate_algo, validate_flag_name, validate_location,
+    validate_number, validate_path,
 };
 
 /// Resources exposed by the server: `(uri, display name, rizin JSON command)`.
@@ -58,6 +58,8 @@ Listings are paged: they return `items` with `total` and, when more remain, \
 page size). `decompile` uses rz-ghidra or jsdec when installed (see `decompilers`), else built-in \
 pseudo-disassembly. Name library functions with the `flirt_*` tools (FLIRT signatures) \
 and, when the rz-silhouette plugin is configured, with `silhouette`. \
+With --allow-write, record findings with `rename_function`, `rename_variable`, \
+`set_comment`, `set_flag`, and `set_function_signature`. \
 Dynamic analysis is available via the `debug_*` tools when the server is started with \
 --allow-debug. Addresses may be hex (e.g. 0x401000) or flag/symbol names (e.g. main, \
 sym.imp.printf). For anything not covered by a dedicated tool, use `command` (text) or \
@@ -73,6 +75,18 @@ pub const WRITE_TOOLS: &[&str] = &[
     "write_string",
     "write_assembly",
     "flirt_create",
+];
+
+/// The tools that change the analysis (names, comments, flags, types),
+/// offered only with `--allow-write`. They do not modify the file.
+pub const ANNOTATION_TOOLS: &[&str] = &[
+    "rename_function",
+    "rename_variable",
+    "set_comment",
+    "remove_comment",
+    "set_flag",
+    "remove_flag",
+    "set_function_signature",
 ];
 
 /// The debugger tools, offered only with `--allow-debug`.
@@ -108,6 +122,7 @@ impl RizinServer {
         for (enabled, tools) in [
             (config.allow_raw, RAW_TOOLS),
             (config.allow_write, WRITE_TOOLS),
+            (config.allow_write, ANNOTATION_TOOLS),
             (config.allow_debug, DEBUG_TOOLS),
         ] {
             if !enabled {
@@ -222,6 +237,77 @@ impl RizinServer {
             .to_error_data());
         }
         Ok(())
+    }
+
+    /// Guard used by the annotation tools: they change the analysis, not the
+    /// file, so a read-only file is fine.
+    async fn ensure_annotate(&self) -> Result<(), ErrorData> {
+        if !self.manager.config().allow_write {
+            return Err(RizinError::NotPermitted(
+                "annotation tools are disabled; start the server with --allow-write".into(),
+            )
+            .to_error_data());
+        }
+        if !self.manager.state().await.open {
+            return Err(RizinError::NoFileOpen.to_error_data());
+        }
+        Ok(())
+    }
+
+    /// Run a command that changes state, failing also when Rizin logs an
+    /// error but reports success, as `f`, `wx` and `Fs` do.
+    async fn cmd_strict(&self, cmd: &str) -> Result<String, ErrorData> {
+        let out = self.manager.exec(cmd).await.mcp()?;
+        let out = crate::backend::check(cmd, out).mcp()?;
+        let errors: Vec<&str> = out
+            .messages
+            .iter()
+            .map(String::as_str)
+            .filter(|m| m.starts_with("ERROR"))
+            .collect();
+        if !errors.is_empty() {
+            return Err(RizinError::CommandFailed {
+                cmd: cmd.to_string(),
+                status: CmdStatus::Error,
+                detail: errors.join("\n"),
+            }
+            .to_error_data());
+        }
+        Ok(out.output)
+    }
+
+    /// The address `loc` (a hex address or flag) stands for, as `0x...`.
+    async fn resolve(&self, loc: &str) -> Result<String, ErrorData> {
+        let loc = validate_location(loc).mcp()?;
+        let addr = self.manager.cmd(&format!("s @ {loc}")).await.mcp()?;
+        let addr = addr.trim();
+        // A pipe to Rizin before 0.10 prints nothing for an unknown flag.
+        if !addr.starts_with("0x") {
+            return Err(RizinError::InvalidArgument {
+                arg: loc,
+                reason: "not a known address or flag".into(),
+            }
+            .to_error_data());
+        }
+        Ok(addr.to_string())
+    }
+
+    /// The start address and `afij` entry of the function covering `loc`.
+    async fn function_at(&self, loc: &str) -> Result<(String, Value), ErrorData> {
+        let addr = self.resolve(loc).await?;
+        let info = self.manager.cmdj(&format!("afij @ {addr}")).await.mcp()?;
+        let Some(func) = info.as_array().and_then(|a| a.first()).cloned() else {
+            return Err(RizinError::InvalidArgument {
+                arg: loc.to_string(),
+                reason: "no function there (analyze it first, e.g. with analyze_function)".into(),
+            }
+            .to_error_data());
+        };
+        let start = func
+            .get("offset")
+            .and_then(Value::as_u64)
+            .map_or(addr, |o| format!("0x{o:x}"));
+        Ok((start, func))
     }
 
     /// Guard used by the raw command tools.
@@ -980,6 +1066,155 @@ impl RizinServer {
             self.manager.cmdj(&format!("/xj {hex}")).await.mcp()?,
             &p.page,
         ))
+    }
+
+    // --- Annotation (guarded by --allow-write) ----------------------------
+
+    /// Rename a function (`afn`).
+    #[tool(
+        description = "Rename the function containing a location; returns the name Rizin \
+        stored. Changes the analysis only, not the file. Requires --allow-write (afn)."
+    )]
+    async fn rename_function(
+        &self,
+        Parameters(p): Parameters<RenameFunctionParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_annotate().await?;
+        let (addr, before) = self.function_at(&p.at).await?;
+        let name = quote_arg(&p.name).mcp()?;
+        self.cmd_strict(&format!("afn {name} @ {addr}")).await?;
+        let (_, after) = self.function_at(&addr).await?;
+        Ok(self.json_result(json!({
+            "function": addr,
+            "previous_name": before["name"],
+            "name": after["name"],
+        })))
+    }
+
+    /// Rename a function argument or local variable (`afvn`).
+    #[tool(
+        description = "Rename an argument or local variable of the function containing a \
+        location (see function_variables for the names). Requires --allow-write (afvn)."
+    )]
+    async fn rename_variable(
+        &self,
+        Parameters(p): Parameters<RenameVariableParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_annotate().await?;
+        let (addr, _) = self.function_at(&p.at).await?;
+        let new = quote_arg(&p.new_name).mcp()?;
+        let old = quote_arg(&p.old_name).mcp()?;
+        self.cmd_strict(&format!("afvn {new} {old} @ {addr}"))
+            .await?;
+        let vars = self.manager.cmdj(&format!("afvlj @ {addr}")).await.mcp()?;
+        let names: Vec<&str> = vars
+            .as_object()
+            .into_iter()
+            .flat_map(|o| o.values())
+            .filter_map(Value::as_array)
+            .flatten()
+            .filter_map(|v| v.get("name").and_then(Value::as_str))
+            .collect();
+        if !names.contains(&p.new_name.as_str()) {
+            return Err(RizinError::InvalidArgument {
+                arg: p.old_name,
+                reason: format!("no such variable in the function at {addr}"),
+            }
+            .to_error_data());
+        }
+        Ok(self.json_result(json!({
+            "function": addr,
+            "old_name": p.old_name,
+            "new_name": p.new_name,
+        })))
+    }
+
+    /// Set or append a comment (`CC`).
+    #[tool(
+        description = "Set the comment at an address (replacing any comment there, or \
+        appending with append=true); returns the resulting comment. Requires --allow-write \
+        (CC)."
+    )]
+    async fn set_comment(
+        &self,
+        Parameters(p): Parameters<SetCommentParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_annotate().await?;
+        let addr = self.resolve(&p.address).await?;
+        let text = quote_arg(&p.text).mcp()?;
+        if !p.append.unwrap_or(false) {
+            self.cmd_strict(&format!("CC- @ {addr}")).await?;
+        }
+        self.cmd_strict(&format!("CC {text} @ {addr}")).await?;
+        let comment = self.manager.cmd(&format!("CC. @ {addr}")).await.mcp()?;
+        Ok(self.json_result(json!({
+            "at": addr,
+            "comment": comment.trim_end_matches('\n'),
+        })))
+    }
+
+    /// Remove a comment (`CC-`).
+    #[tool(description = "Remove the comment at an address. Requires --allow-write (CC-).")]
+    async fn remove_comment(
+        &self,
+        Parameters(p): Parameters<AddressParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_annotate().await?;
+        let addr = self.resolve(&p.address).await?;
+        self.cmd_strict(&format!("CC- @ {addr}")).await?;
+        Ok(self.json_result(json!({ "at": addr, "removed": true })))
+    }
+
+    /// Create or move a flag (`f+`).
+    #[tool(
+        description = "Name an address with a flag (creating it, or moving an existing flag of \
+        that name), usable as a location afterwards. Requires --allow-write (f+)."
+    )]
+    async fn set_flag(
+        &self,
+        Parameters(p): Parameters<SetFlagParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_annotate().await?;
+        let name = validate_flag_name(&p.name).mcp()?;
+        let addr = self.resolve(&p.address).await?;
+        let size = clamp_count(p.size, 1, u64::MAX);
+        // `f` refuses an address that already has a flag; `f+` adds one in
+        // any case, and moves a flag of the same name.
+        self.cmd_strict(&format!("f+ {name} {size} @ {addr}"))
+            .await?;
+        let at = self.resolve(&name).await?;
+        Ok(self.json_result(json!({ "name": name, "at": at, "size": size })))
+    }
+
+    /// Remove a flag (`f-`).
+    #[tool(description = "Remove a flag by name. Requires --allow-write (f-).")]
+    async fn remove_flag(
+        &self,
+        Parameters(p): Parameters<FlagNameParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_annotate().await?;
+        let name = validate_flag_name(&p.name).mcp()?;
+        // `f-` of an unknown name succeeds silently.
+        self.resolve(&name).await?;
+        self.cmd_strict(&format!("f- {name}")).await?;
+        Ok(self.json_result(json!({ "name": name, "removed": true })))
+    }
+
+    /// Set a function's C signature (`afs`).
+    #[tool(
+        description = "Set the C prototype of the function containing a location, typing its \
+        arguments and return value (e.g. 'int parse_args(int argc, char **argv)'); returns \
+        the resulting signature. Requires --allow-write (afs)."
+    )]
+    async fn set_function_signature(
+        &self,
+        Parameters(p): Parameters<SetSignatureParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_annotate().await?;
+        let (addr, _) = self.function_at(&p.at).await?;
+        let sig = quote_arg(&p.signature).mcp()?;
+        self.cmd_strict(&format!("afs {sig} @ {addr}")).await?;
+        Ok(self.json_result(self.manager.cmdj(&format!("afsj @ {addr}")).await.mcp()?))
     }
 
     // --- Writing (guarded) ------------------------------------------------
@@ -2076,13 +2311,18 @@ mod tests {
             allow_debug: false,
             ..Default::default()
         });
-        for name in RAW_TOOLS.iter().chain(WRITE_TOOLS).chain(DEBUG_TOOLS) {
+        for name in RAW_TOOLS
+            .iter()
+            .chain(WRITE_TOOLS)
+            .chain(ANNOTATION_TOOLS)
+            .chain(DEBUG_TOOLS)
+        {
             assert!(all.iter().any(|n| n == name), "{name} missing");
             assert!(!locked.iter().any(|n| n == name), "{name} offered");
         }
         assert_eq!(
             all.len() - locked.len(),
-            RAW_TOOLS.len() + WRITE_TOOLS.len() + DEBUG_TOOLS.len()
+            RAW_TOOLS.len() + WRITE_TOOLS.len() + ANNOTATION_TOOLS.len() + DEBUG_TOOLS.len()
         );
         // The defaults offer raw commands, but neither writing nor debugging.
         let default = listed(ServerConfig::default());
