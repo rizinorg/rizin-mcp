@@ -128,6 +128,15 @@ pub enum RizinError {
     /// A path that should exist was not found.
     #[error("file not found: {0}")]
     FileNotFound(String),
+
+    /// Rizin could not open the target.
+    #[error("rizin cannot open '{target}'{}", fmt_detail(.detail))]
+    OpenFailed {
+        /// The path or URI.
+        target: String,
+        /// What Rizin said, possibly empty.
+        detail: String,
+    },
 }
 
 /// Render diagnostics after the main error message.
@@ -167,6 +176,7 @@ impl RizinError {
             | IllegalCommand { .. }
             | EmptyJson { .. }
             | FileNotFound(_)
+            | OpenFailed { .. }
             | NotPermitted(_) => ErrorData::invalid_params(self.to_string(), None),
             _ => ErrorData::internal_error(self.to_string(), None),
         }

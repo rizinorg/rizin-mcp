@@ -17,7 +17,7 @@ use crate::session::AnalysisLevel;
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OpenFileParams {
     /// Path to the binary/file to open, or a Rizin URI (e.g. `malloc://512`,
-    /// `hex://9090`). Use `-` for an empty session.
+    /// `hex://9090`). Use `-` for an empty session with no file open.
     pub path: String,
     /// Analysis depth to run immediately after opening. Defaults to `basic`.
     #[serde(default)]

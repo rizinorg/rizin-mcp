@@ -226,8 +226,11 @@ impl Core {
 
     /// Open and load a target (path or Rizin URI) into the core.
     ///
-    /// Returns whether Rizin reported success.
-    pub fn file_open_load(&self, path: &str, write: bool) -> Result<bool, RizinError> {
+    /// # Errors
+    /// [`RizinError::InvalidArgument`] for an interior NUL, and
+    /// [`RizinError::OpenFailed`], with what Rizin logged, if Rizin cannot open
+    /// the target.
+    pub fn file_open_load(&self, path: &str, write: bool) -> Result<(), RizinError> {
         let c = CString::new(path).map_err(|_| RizinError::InvalidArgument {
             arg: path.to_string(),
             reason: "path contains an interior NUL byte".into(),
@@ -238,8 +241,17 @@ impl Core {
             RZ_PERM_R
         };
         let _g = lock();
-        let ok = unsafe { rz_core_file_open_load(self.ptr, c.as_ptr(), 0, perms, write) };
-        Ok(ok)
+        let (ok, messages) = with_log_capture(|| unsafe {
+            rz_core_file_open_load(self.ptr, c.as_ptr(), 0, perms, write)
+        });
+        if ok {
+            Ok(())
+        } else {
+            Err(RizinError::OpenFailed {
+                target: path.to_string(),
+                detail: messages.join("\n"),
+            })
+        }
     }
 }
 

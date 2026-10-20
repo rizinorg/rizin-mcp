@@ -275,3 +275,46 @@ async fn writes_are_verified() {
         assert_eq!(read("0x60", 4).await, "deadbeef", "{t:?}");
     }
 }
+
+#[tokio::test]
+async fn empty_session_and_open_failures() {
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        // `-` opens a session without a file on both backends.
+        let info = s
+            .ok("open_file", json!({ "path": "-", "analysis": "none" }))
+            .await;
+        assert_eq!(info["file"], "-", "{t:?}");
+        let r = s
+            .call("command", json!({ "command": "echo ready" }))
+            .await
+            .expect("command");
+        assert_eq!(r.is_error, Some(false), "{t:?}");
+
+        // A target Rizin cannot open fails the same way on both backends,
+        // with Rizin's reason.
+        for target in ["nosuchscheme://x", "file:///nonexistent", "malloc://0"] {
+            let err = s
+                .call("open_file", json!({ "path": target, "analysis": "none" }))
+                .await
+                .expect_err(target);
+            assert_eq!(err.code.0, -32602, "{t:?}: {err:?}");
+            assert!(
+                err.message
+                    .starts_with(&format!("rizin cannot open '{target}'")),
+                "{t:?}: {}",
+                err.message
+            );
+            assert!(
+                err.message.contains("Cannot open"),
+                "{t:?}: {}",
+                err.message
+            );
+        }
+        let err = s
+            .call("open_file", json!({ "path": "/", "analysis": "none" }))
+            .await
+            .expect_err("a directory");
+        assert!(err.message.contains("directory"), "{t:?}: {}", err.message);
+    }
+}
