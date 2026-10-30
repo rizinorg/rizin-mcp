@@ -362,6 +362,14 @@ pub struct SearchRopParams {
     /// each matching in full (ignoring case and spacing). Defaults to `false`.
     #[serde(default)]
     pub exact: Option<bool>,
+    /// Search from this address on (hex address or flag/symbol name, e.g.
+    /// `section..text`). Defaults to the start of the address space.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Search below this address (hex address or flag/symbol name,
+    /// exclusive). Defaults to the end of the address space.
+    #[serde(default)]
+    pub to: Option<String>,
     /// Paging.
     #[serde(flatten)]
     pub page: PageParams,
