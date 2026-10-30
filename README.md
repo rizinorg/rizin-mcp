@@ -13,7 +13,9 @@ annotation, patching, and debugging), 9 resources, and 3 guided prompts. By
 default 62 tools are offered; see *Security*.
 
 Built on the official [Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk)
-(`rmcp`). Tested end-to-end against Rizin `dev` (0.10.0) and v0.9.1; exact
+(`rmcp` 3), which speaks the MCP revisions from 2024-11-05 to 2026-07-28: clients
+that begin with `initialize` and clients that begin with `server/discover`
+(2026-07-28, e.g. FastMCP) both connect. Tested end-to-end against Rizin `dev` (0.10.0) and v0.9.1; exact
 command status needs Rizin 0.10 (see *Errors*). Changes are listed in
 [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -250,7 +252,7 @@ them (`hint`), instead of just returning nothing.
 
 ## Requirements
 
-- Rust 1.87+ (2024 edition) to build, and a C compiler for the `api`
+- Rust 1.88+ (2024 edition) to build, and a C compiler for the `api`
   backend (a few lines of C route Rizin's log messages to the server).
 - **For the default `api` backend:** Rizin's development libraries discoverable
   via `pkg-config` (i.e. `pkg-config --exists rz_core` succeeds). Install Rizin
