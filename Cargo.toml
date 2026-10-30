@@ -2,7 +2,7 @@
 name = "rizin-mcp"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.88"
 license = "LGPL-3.0-or-later"
 description = "Model Context Protocol server exposing the Rizin reverse-engineering framework"
 readme = "README.md"
@@ -23,7 +23,7 @@ path = "src/lib.rs"
 anyhow = "1.0.103"
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
-rmcp = { version = "1.8.0", features = ["server", "transport-io"] }
+rmcp = { version = "3.8.0", features = ["server", "transport-io"] }
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
@@ -41,7 +41,7 @@ cc = "1.2"
 [dev-dependencies]
 proptest = "1.11.0"
 # The MCP-level tests drive the server through a real rmcp client.
-rmcp = { version = "1.8.0", features = ["client", "server", "transport-io"] }
+rmcp = { version = "3.8.0", features = ["client", "server", "transport-io"] }
 
 [features]
 # The `api` backend links Rizin's C libraries (librz_core et al.) and runs

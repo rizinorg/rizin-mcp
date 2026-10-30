@@ -161,7 +161,7 @@ impl RizinServer {
         let size = serde_json::to_string(&value).map_or(0, |s| s.len());
         let max = self.manager.config().max_output_bytes;
         if size > max {
-            return CallToolResult::error(vec![Content::text(format!(
+            return CallToolResult::error(vec![ContentBlock::text(format!(
                 "the result is {size} bytes, over the {max}-byte output limit; \
                  narrow the request (e.g. a smaller count or a smaller function), \
                  or raise the server's --max-output-bytes"
@@ -209,7 +209,7 @@ impl RizinServer {
     /// Build a plain-text tool result within the output ceiling.
     fn text_result(&self, text: impl Into<String>) -> CallToolResult {
         let (text, _) = truncate_text(text.into(), self.manager.config().max_output_bytes);
-        CallToolResult::success(vec![Content::text(text)])
+        CallToolResult::success(vec![ContentBlock::text(text)])
     }
 
     /// Build a tool result whose body is plain text (e.g. decompiled code, kept
@@ -220,7 +220,7 @@ impl RizinServer {
         if truncated {
             meta["truncated"] = json!(true);
         }
-        let mut result = CallToolResult::success(vec![Content::text(text)]);
+        let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
         result.structured_content = Some(meta);
         result
     }
@@ -766,9 +766,9 @@ impl RizinServer {
             let (output, _) = truncate_text(out.output, budget);
             let mut content = Vec::new();
             if !output.is_empty() {
-                content.push(Content::text(output));
+                content.push(ContentBlock::text(output));
             }
-            content.push(Content::text(format!(
+            content.push(ContentBlock::text(format!(
                 "rizin messages:\n{}",
                 out.messages.join("\n")
             )));
@@ -777,7 +777,7 @@ impl RizinServer {
         // A chained line may have printed useful output before failing.
         let mut content = Vec::new();
         if !out.output.is_empty() {
-            content.push(Content::text(out.output.clone()));
+            content.push(ContentBlock::text(out.output.clone()));
         }
         let mut summary = if legacy_failure {
             "rizin command failed (this Rizin reports no status, but it logged an error)"
@@ -789,7 +789,7 @@ impl RizinServer {
             summary.push('\n');
             summary.push_str(&out.detail());
         }
-        content.push(Content::text(summary));
+        content.push(ContentBlock::text(summary));
         let mut result = CallToolResult::error(content);
         result.structured_content = Some(json!({
             "status": out.status,
@@ -2632,7 +2632,7 @@ impl RizinServer {
     )]
     async fn prompt_triage(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             "Perform a first-pass triage of the binary that is currently open in Rizin. \
              Use `binary_info` for format/arch/entry, `entrypoints`, `sections`, \
              `imports`/`exports`, and `list_strings` to characterize it. Then run \
@@ -2658,7 +2658,7 @@ impl RizinServer {
             p.address
         ));
         result.messages = vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             format!(
                 "Analyze the function at {addr} in depth. Start with \
                  `function_summary {{\"at\": \"{addr}\"}}` for its signature, callers, \
@@ -2680,7 +2680,7 @@ impl RizinServer {
     )]
     async fn prompt_find_vulnerabilities(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             "Look for common vulnerability patterns in the open binary. Use `imports` to find \
              risky calls (e.g. strcpy, gets, sprintf, system, memcpy, malloc/free) and \
              `xrefs_to` each to locate call sites. Inspect those sites with \
@@ -2699,7 +2699,7 @@ impl RizinServer {
 #[tool_handler(router = self.tool_router)]
 #[prompt_handler]
 impl ServerHandler for RizinServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> InitializeResult {
         let capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_resources()
@@ -2722,7 +2722,7 @@ impl ServerHandler for RizinServer {
     ) -> Result<ListResourcesResult, ErrorData> {
         let resources = RESOURCES
             .iter()
-            .map(|(uri, name, _)| RawResource::new(*uri, *name).no_annotation())
+            .map(|(uri, name, _)| Resource::new(*uri, *name))
             .collect();
         Ok(ListResourcesResult::with_all_items(resources))
     }
@@ -2732,11 +2732,10 @@ impl ServerHandler for RizinServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
-        let template = RawResourceTemplate::new(
+        let template = ResourceTemplate::new(
             "rizin://disasm/{address}",
             "disassemble the function at {address}",
-        )
-        .no_annotation();
+        );
         Ok(ListResourceTemplatesResult::with_all_items(vec![template]))
     }
 
@@ -2744,7 +2743,7 @@ impl ServerHandler for RizinServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
+    ) -> Result<ReadResourceResponse, ErrorData> {
         let uri = request.uri.as_str();
         let value = if let Some((_, _, cmd)) = RESOURCES.iter().find(|(u, _, _)| *u == uri) {
             self.manager.cmdj(cmd).await.mcp()?
@@ -2758,9 +2757,7 @@ impl ServerHandler for RizinServer {
             ));
         };
         let pretty = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(
-            pretty, uri,
-        )]))
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(pretty, uri)]).into())
     }
 }
 
@@ -2784,7 +2781,7 @@ fn as_structured(value: Value) -> Value {
 /// and as structured content (for clients that parse it).
 fn structured_result(value: Value) -> CallToolResult {
     let text = serde_json::to_string(&value).unwrap_or_default();
-    let mut result = CallToolResult::success(vec![Content::text(text)]);
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = Some(value);
     result
 }
