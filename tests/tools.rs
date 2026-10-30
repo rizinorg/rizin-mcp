@@ -36,7 +36,10 @@ fn pipe_available() -> bool {
 
 /// A real ELF to analyze.
 fn target() -> String {
-    for p in ["/bin/ls", "/usr/bin/ls", "/bin/cat"] {
+    // GNU `ls` first: from Ubuntu 25.10 on, `ls` is the multicall binary of
+    // uutils, a Rust program of 11.8 MB whose `main` only dispatches, and the
+    // GNU one, from the required package gnu-coreutils, is `gnuls`.
+    for p in ["/usr/bin/gnuls", "/bin/ls", "/usr/bin/ls", "/bin/cat"] {
         if std::path::Path::new(p).exists() {
             return p.to_string();
         }
