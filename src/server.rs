@@ -729,10 +729,11 @@ impl RizinServer {
     /// Run a raw Rizin command and return its text output.
     #[tool(
         description = "Run a raw Rizin command line and return its text output. Chain \
-        multiple commands with ';'. When Rizin reports a failure (e.g. an unknown \
-        command), the result is an error carrying the status, Rizin's messages, and \
-        whatever was printed before the failure. This exposes the full Rizin surface \
-        (including the debugger and shell escapes), so use with care.",
+        multiple commands with ';'. Rizin's messages (errors, warnings, usage) follow the \
+        output as a separate text item. When the command fails (e.g. an unknown command \
+        or wrong arguments), the result is an error carrying the status, Rizin's \
+        messages, and whatever was printed before the failure. This exposes the full \
+        Rizin surface (including the debugger and shell escapes), so use with care.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -746,15 +747,44 @@ impl RizinServer {
     ) -> Result<CallToolResult, ErrorData> {
         self.ensure_raw()?;
         let out = self.manager.exec(&p.command).await.mcp()?;
-        if !out.status.is_failure() {
-            return Ok(self.text_result(out.output));
+        // A pipe to Rizin before 0.10 reports no status, so a command that
+        // printed nothing but an error is taken as failed.
+        let legacy_failure = out.status == CmdStatus::Unknown
+            && out.output.trim().is_empty()
+            && out.messages.iter().any(|m| m.starts_with("ERROR"));
+        if !out.status.is_failure() && !legacy_failure {
+            // A command can succeed and still say something the caller needs,
+            // e.g. `e` refusing a value with status OK.
+            if out.messages.is_empty() {
+                return Ok(self.text_result(out.output));
+            }
+            let budget = self
+                .manager
+                .config()
+                .max_output_bytes
+                .saturating_sub(out.detail().len());
+            let (output, _) = truncate_text(out.output, budget);
+            let mut content = Vec::new();
+            if !output.is_empty() {
+                content.push(Content::text(output));
+            }
+            content.push(Content::text(format!(
+                "rizin messages:\n{}",
+                out.messages.join("\n")
+            )));
+            return Ok(CallToolResult::success(content));
         }
         // A chained line may have printed useful output before failing.
         let mut content = Vec::new();
         if !out.output.is_empty() {
             content.push(Content::text(out.output.clone()));
         }
-        let mut summary = format!("rizin command failed ({})", out.status);
+        let mut summary = if legacy_failure {
+            "rizin command failed (this Rizin reports no status, but it logged an error)"
+                .to_string()
+        } else {
+            format!("rizin command failed ({})", out.status)
+        };
         if !out.messages.is_empty() {
             summary.push('\n');
             summary.push_str(&out.detail());
