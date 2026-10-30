@@ -2344,9 +2344,13 @@ impl RizinServer {
         let range = self
             .search_range(p.from.as_deref(), p.to.as_deref())
             .await?;
+        // Rizin's gadget cache lists gadgets in another order than a fresh
+        // search, which mixes up the pages of a listing, and it keeps only
+        // the first gadget of identical bytes in the range it was built for,
+        // so a narrower search served from it misses gadgets.
         let gadgets = self
             .manager
-            .cmdj(&format!("/Rj {filter}{range}"))
+            .cmdj(&format!("/Rj {filter} @e:gadget.cache=false{range}"))
             .await
             .mcp()?;
         if !p.exact.unwrap_or(false) {
