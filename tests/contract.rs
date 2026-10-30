@@ -22,7 +22,7 @@ const COMMANDS: &[&str] = &[
     "flj", "fslj", "fss+", "fss-", "f+", "f-", "fd", // functions and references
     "aflj", "afij", "afvlj", "af", "afn", "afvn", "afs", "afsj", "afsbj", "axtj", "axfj", "agf",
     // printing
-    "pdj", "pdfj", "pdr", "pxj", "p8", "pa", "aoj", "ph", "phlj", "plf", "Lcj",
+    "pdj", "pdfj", "pdr", "pxj", "p8", "pa", "aoj", "ph", "phlj", "plf", "Lcj", "aij",
     // comments, projects, writing
     "CC", "CC-", "CC.", "Ps", "wx", // searching and diffing
     "/xj", "/v1j", "/v2j", "/v4j", "/v8j", "/Rj", "/mj", "/cmj", "cxj", "cfj",
@@ -259,6 +259,12 @@ async fn json_fields_the_tools_read() {
         // disassemble_function pages `ops`
         let pdf = j("pdfj @ main").await;
         require(&pdf, "pdfj", "ops", "array");
+
+        // disassemble tells unmapped memory from 0xff bytes
+        let mapped = j("aij @ entry0").await;
+        require(&mapped, "aij", "read", "str");
+        let unmapped = j("aij @ 0xdeadbeef").await;
+        assert!(unmapped.get("read").is_none(), "{t:?} aij: {unmapped}");
 
         // search_rop and the exact filter
         let gadgets = j("/Rj \"ret\"").await;

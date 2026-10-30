@@ -535,16 +535,19 @@ async fn errors_say_what_went_wrong() {
         )
         .await;
 
-        // An unmapped address fails with Rizin's reason, not just "no
-        // output" (which a pipe to Rizin before 0.10 still says, but with the
-        // reason attached).
+        // An unmapped address fails with a reason, not just "no output"
+        // (which a pipe to Rizin before 0.10 still says, but with Rizin's
+        // reason attached). Rizin 0.10 lists 0xff bytes there instead, with
+        // no message, so the server says why.
         let err = s
             .call("disassemble", json!({ "at": "0xdeadbeef" }))
             .await
             .expect_err("unmapped");
         assert!(matches!(err.code.0, -32001 | -32602), "{t:?}: {err:?}");
         assert!(
-            err.message.contains("Failed to read") && err.message.contains("0xdeadbeef"),
+            (err.message.contains("Failed to read")
+                || err.message.contains("nothing readable is mapped"))
+                && err.message.contains("0xdeadbeef"),
             "{t:?}: {}",
             err.message
         );
@@ -969,6 +972,19 @@ async fn samples_can_be_sent_as_data() {
             .await
             .expect_err("bad base64");
         assert_eq!(err.code.0, -32602, "{t:?}");
+
+        // 0xff bytes that are there do not decode, but are listed: only
+        // unmapped memory is refused.
+        s.ok(
+            "open_data",
+            json!({ "data": "ffffffff", "encoding": "hex", "analysis": "none" }),
+        )
+        .await;
+        let ops = s
+            .items("disassemble", json!({ "at": "0x0", "count": 2 }))
+            .await;
+        assert_eq!(ops[0]["opcode"], "invalid", "{t:?}: {ops:?}");
+        assert_eq!(ops[0]["bytes"], "ff", "{t:?}: {ops:?}");
     }
 }
 
