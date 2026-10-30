@@ -127,6 +127,21 @@ impl Session {
             .unwrap_or_else(|| panic!("{:?}: {name}: no items in {sc}", self.transport))
             .clone()
     }
+
+    /// The name, start and end of the first 64 KiB of the largest executable
+    /// section.
+    async fn code_window(&self) -> (String, u64, u64) {
+        let sections = self.items("sections", json!({ "limit": 1000 })).await;
+        let text = sections
+            .iter()
+            .filter(|s| s["perm"].as_str().is_some_and(|p| p.contains('x')))
+            .max_by_key(|s| s["vsize"].as_u64())
+            .unwrap_or_else(|| panic!("{:?}: no executable section", self.transport));
+        let start = text["vaddr"].as_u64().expect("vaddr");
+        let size = text["vsize"].as_u64().expect("vsize").min(0x10000);
+        let name = text["name"].as_str().expect("name").to_string();
+        (name, start, start + size)
+    }
 }
 
 /// The gadget addresses of a `search_rop` result.
@@ -209,6 +224,78 @@ async fn search_rop_matches_instruction_chains() {
             .await
             .expect_err("a newline must be rejected");
         assert_eq!(err.code.0, -32602, "{t:?}");
+    }
+}
+
+#[tokio::test]
+async fn search_rop_stays_in_range() {
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        s.ok("open_file", json!({ "path": target(), "analysis": "none" }))
+            .await;
+        let (name, from, to) = s.code_window().await;
+
+        // Every instruction of every gadget lies in [from, to).
+        let hex = s
+            .ok(
+                "search_rop",
+                json!({
+                    "query": "ret",
+                    "from": format!("0x{from:x}"),
+                    "to": format!("0x{to:x}"),
+                    "limit": 100_000,
+                }),
+            )
+            .await;
+        let gadgets = hex["items"].as_array().expect("items");
+        assert!(!gadgets.is_empty(), "{t:?}: no gadgets");
+        for g in gadgets {
+            for op in g["opcodes"].as_array().expect("opcodes") {
+                let at = op["offset"].as_u64().expect("offset");
+                assert!(
+                    (from..to).contains(&at),
+                    "{t:?}: {g} outside [{from:#x}, {to:#x})"
+                );
+            }
+        }
+
+        // Flags and expressions are resolved to the same bounds.
+        let flags = s
+            .ok(
+                "search_rop",
+                json!({
+                    "query": "ret",
+                    "from": format!("section.{name}"),
+                    "to": format!("section.{name}+0x{:x}", to - from),
+                }),
+            )
+            .await;
+        assert_eq!(flags["total"], hex["total"], "{t:?}");
+
+        // A bound Rizin cannot resolve, or one that leaves nothing to search,
+        // is refused rather than widened to the whole address space. Rizin
+        // 0.10 fails the lookup of an unknown flag itself (-32001).
+        for (args, why) in [
+            (
+                json!({ "query": "ret", "from": "nosuchflag" }),
+                "nosuchflag",
+            ),
+            (
+                json!({ "query": "ret", "from": format!("0x{to:x}"), "to": format!("0x{from:x}") }),
+                "must be above",
+            ),
+            (json!({ "query": "ret", "to": "0x0" }), "must be above"),
+        ] {
+            let err = s
+                .call("search_rop", args.clone())
+                .await
+                .expect_err("bad range");
+            assert!(
+                matches!(err.code.0, -32001 | -32602),
+                "{t:?} {args}: {err:?}"
+            );
+            assert!(err.message.contains(why), "{t:?} {args}: {}", err.message);
+        }
     }
 }
 

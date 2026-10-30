@@ -183,7 +183,11 @@ produces the full listing, which the server then slices.
   returns the gadgets containing them in order, each as a substring of an
   instruction, possibly with other instructions in between — the semantics of
   Rizin's `/R` filter. `exact: true` keeps only the gadgets made of exactly
-  those instructions.
+  those instructions. `from`/`to` restrict the search to an address range;
+  without them it covers the whole address space, and its time grows with the
+  bytes searched: about three minutes for the 7.4 MB of code of the uutils
+  0.0.24 multicall binary (on Ubuntu 26.04, `ls` is such a binary), beyond the
+  default command timeout of 120 s.
 - **`search_magic`** needs Rizin's magic database from its data dir. With a
   normally-installed `rizin` (pipe backend, or the `api` backend when the data
   dir is found) it works; on a bare embedded core it returns an empty list.

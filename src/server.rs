@@ -301,6 +301,44 @@ impl RizinServer {
         Ok(addr.to_string())
     }
 
+    /// The `@e:` settings that restrict a `/R` search to `[from, to)`, each
+    /// bound a location; empty when neither is given.
+    async fn search_range(
+        &self,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<String, ErrorData> {
+        let address = |loc: &str, addr: String| {
+            u64::from_str_radix(addr.trim_start_matches("0x"), 16).map_err(|_| {
+                RizinError::InvalidArgument {
+                    arg: loc.to_string(),
+                    reason: format!("Rizin resolved it to `{addr}`, not an address"),
+                }
+                .to_error_data()
+            })
+        };
+        let mut bounds = String::new();
+        let mut start = 0;
+        if let Some(from) = from {
+            start = address(from, self.resolve(from).await?)?;
+            bounds.push_str(&format!(" @e:search.from=0x{start:x}"));
+        }
+        if let Some(to) = to {
+            let end = address(to, self.resolve(to).await?)?;
+            // Rizin only warns about `search.to=0` and then searches
+            // everything from `from` on.
+            if end <= start {
+                return Err(RizinError::InvalidArgument {
+                    arg: to.to_string(),
+                    reason: format!("`to` (0x{end:x}) must be above `from` (0x{start:x})"),
+                }
+                .to_error_data());
+            }
+            bounds.push_str(&format!(" @e:search.to=0x{end:x}"));
+        }
+        Ok(bounds)
+    }
+
     /// The start address and `afij` entry of the function covering `loc`.
     async fn function_at(&self, loc: &str) -> Result<(String, Value), ErrorData> {
         let addr = self.resolve(loc).await?;
@@ -2290,8 +2328,11 @@ impl RizinServer {
         description = "Search for ROP gadgets containing one or more `;`-separated \
         instructions (e.g. 'pop rdi; ret'), matched in order, each as a substring of an \
         instruction; other instructions may sit in between. Set exact=true to only get \
-        gadgets made of exactly those instructions. Returns the gadgets with their \
-        instructions and addresses (/Rj).",
+        gadgets made of exactly those instructions. Searches the whole address space unless \
+        from/to restrict it; the time grows with the bytes searched, so a binary with \
+        megabytes of code can take minutes and exceed the command timeout: restrict it \
+        there, e.g. to part of a section. Returns the gadgets with their instructions and \
+        addresses (/Rj).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_rop(
@@ -2300,7 +2341,14 @@ impl RizinServer {
     ) -> Result<CallToolResult, ErrorData> {
         let fields = parse_rop_query(&p.query).mcp()?;
         let filter = quote_arg(&fields.join(";")).mcp()?;
-        let gadgets = self.manager.cmdj(&format!("/Rj {filter}")).await.mcp()?;
+        let range = self
+            .search_range(p.from.as_deref(), p.to.as_deref())
+            .await?;
+        let gadgets = self
+            .manager
+            .cmdj(&format!("/Rj {filter}{range}"))
+            .await
+            .mcp()?;
         if !p.exact.unwrap_or(false) {
             return Ok(self.listing(gadgets, &p.page));
         }
