@@ -142,6 +142,17 @@ impl Session {
         let name = text["name"].as_str().expect("name").to_string();
         (name, start, start + size)
     }
+
+    /// The gadgets `search_rop` finds with `args` in the [`Self::code_window`].
+    /// The time of a search grows with the bytes searched: on a target as
+    /// large as the multicall `ls` of uutils, the whole file would take
+    /// minutes, beyond the command timeout.
+    async fn rop(&self, mut args: Value) -> Vec<Value> {
+        let (_, from, to) = self.code_window().await;
+        args["from"] = json!(format!("0x{from:x}"));
+        args["to"] = json!(format!("0x{to:x}"));
+        self.items("search_rop", args).await
+    }
 }
 
 /// The gadget addresses of a `search_rop` result.
@@ -161,12 +172,8 @@ async fn search_rop_matches_instruction_chains() {
 
         // The chain is matched in order, so every hit has `pop` then `ret`;
         // spaces around `;` do not matter.
-        let spaced = s
-            .items("search_rop", json!({ "query": "pop rbp; ret" }))
-            .await;
-        let tight = s
-            .items("search_rop", json!({ "query": "pop rbp;ret" }))
-            .await;
+        let spaced = s.rop(json!({ "query": "pop rbp; ret" })).await;
+        let tight = s.rop(json!({ "query": "pop rbp;ret" })).await;
         assert_eq!(spaced, tight, "{t:?}");
         assert!(!gadget_starts(&spaced).is_empty(), "{t:?}: no gadgets");
         for g in &spaced {
@@ -185,7 +192,7 @@ async fn search_rop_matches_instruction_chains() {
         }
 
         // A chain is narrower than its first instruction alone.
-        let first = s.items("search_rop", json!({ "query": "pop rbp" })).await;
+        let first = s.rop(json!({ "query": "pop rbp" })).await;
         assert!(
             gadget_starts(&first).len() >= gadget_starts(&spaced).len(),
             "{t:?}"
@@ -193,10 +200,7 @@ async fn search_rop_matches_instruction_chains() {
 
         // Exact gadgets are exactly `pop rbp; ret`, a subset of the chain hits.
         let exact = s
-            .items(
-                "search_rop",
-                json!({ "query": "pop rbp; ret", "exact": true }),
-            )
+            .rop(json!({ "query": "pop rbp; ret", "exact": true }))
             .await;
         let starts = gadget_starts(&spaced);
         assert!(
@@ -213,10 +217,7 @@ async fn search_rop_matches_instruction_chains() {
         // Shell metacharacters stay inside the quoted filter: no gadget
         // contains this text, and no `px` output leaks in.
         let quoted = s
-            .items(
-                "search_rop",
-                json!({ "query": "ret\"; px 4 $(px 4) `px 4`" }),
-            )
+            .rop(json!({ "query": "ret\"; px 4 $(px 4) `px 4`" }))
             .await;
         assert!(quoted.is_empty(), "{t:?}");
         let err = s
@@ -545,9 +546,14 @@ async fn listings_are_paged_and_bounded() {
         }
         assert_eq!(seen, total, "{t:?}");
 
-        // The gadget listing that used to be ~1 MB stays bounded.
+        // A gadget listing stays bounded: 64 KiB of the code of `/bin/ls`
+        // has over 1000 gadgets, about 330 KB of JSON.
+        let (_, from, to) = s.code_window().await;
         let r = s
-            .call("search_rop", json!({ "query": "ret" }))
+            .call(
+                "search_rop",
+                json!({ "query": "ret", "from": format!("0x{from:x}"), "to": format!("0x{to:x}") }),
+            )
             .await
             .expect("search_rop");
         assert!(text_len(&r) <= 128 << 10, "{t:?}: {} bytes", text_len(&r));

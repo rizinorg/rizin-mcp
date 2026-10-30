@@ -266,8 +266,28 @@ async fn json_fields_the_tools_read() {
         let unmapped = j("aij @ 0xdeadbeef").await;
         assert!(unmapped.get("read").is_none(), "{t:?} aij: {unmapped}");
 
-        // search_rop and the exact filter
-        let gadgets = j("/Rj \"ret\"").await;
+        // search_rop and the exact filter, in the first 64 KiB of the
+        // largest executable section: the time of `/R` grows with the bytes
+        // searched, and the whole multicall `ls` of uutils takes minutes.
+        let sections = j("iSj").await;
+        let text = sections
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|s| s["perm"].as_str().is_some_and(|p| p.contains('x')))
+            .max_by_key(|s| s["vsize"].as_u64())
+            .unwrap_or_else(|| panic!("{t:?} iSj: no executable section in {sections}"));
+        require(text, "iSj", "vaddr", "u64");
+        require(text, "iSj", "vsize", "u64");
+        let from = text["vaddr"].as_u64().unwrap_or_default();
+        let to = from + text["vsize"].as_u64().unwrap_or_default().min(0x10000);
+        let cmd = format!(
+            "/Rj \"ret\" @e:gadget.cache=false @e:search.from=0x{from:x} @e:search.to=0x{to:x}"
+        );
+        let gadgets = mgr
+            .cmdj(&cmd)
+            .await
+            .unwrap_or_else(|e| panic!("{t:?} {cmd}: {e}"));
         require(&gadgets, "/Rj", "0.opcodes.0.offset", "u64");
         require(&gadgets, "/Rj", "0.opcodes.0.opcode", "str");
 
