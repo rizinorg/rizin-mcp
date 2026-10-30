@@ -1172,12 +1172,25 @@ impl RizinServer {
     ) -> Result<CallToolResult, ErrorData> {
         let count = clamp_count(p.count, 32, self.manager.config().max_count);
         let suffix = at_suffix(&p.at).mcp()?;
-        Ok(self.json_result(
-            self.manager
-                .cmdj(&format!("pdj {count}{suffix}"))
-                .await
-                .mcp()?,
-        ))
+        let ops = self
+            .manager
+            .cmdj(&format!("pdj {count}{suffix}"))
+            .await
+            .mcp()?;
+        // Since Rizin 0.10, `pdj` also lists what it could not read, as 0xff
+        // `invalid` instructions, without a message: where nothing readable
+        // is mapped, `aij` has no `read`.
+        if ops[0]["opcode"] == "invalid" {
+            let info = self.manager.cmdj(&format!("aij{suffix}")).await.mcp()?;
+            if info.get("read").is_none() {
+                return Err(RizinError::InvalidArgument {
+                    arg: p.at.clone().unwrap_or_else(|| "the current seek".into()),
+                    reason: "nothing readable is mapped there".into(),
+                }
+                .to_error_data());
+            }
+        }
+        Ok(self.json_result(ops))
     }
 
     /// Disassemble a whole function (`pdfj`), its instructions paged.
