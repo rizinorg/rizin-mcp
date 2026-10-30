@@ -415,6 +415,58 @@ async fn writes_are_verified() {
     }
 }
 
+/// The text of every content item of a result.
+fn text_of(r: &CallToolResult) -> String {
+    r.content
+        .iter()
+        .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn raw_commands_return_what_rizin_says() {
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        s.ok("open_file", json!({ "path": target(), "analysis": "none" }))
+            .await;
+        let run = |cmd: &str| {
+            let s = &s;
+            let cmd = cmd.to_string();
+            async move {
+                s.call("command", json!({ "command": cmd }))
+                    .await
+                    .expect("command")
+            }
+        };
+
+        // A failure carries Rizin's error and the usage it prints, also
+        // through a pipe to Rizin before 0.10, which reports no status.
+        let r = run("axt foo bar baz").await;
+        assert_eq!(r.is_error, Some(true), "{t:?}: {r:?}");
+        let text = text_of(&r);
+        assert!(text.contains("Wrong number of arguments"), "{t:?}: {text}");
+        assert!(text.contains("Usage: axt"), "{t:?}: {text}");
+        let r = run("s nosuchflag").await;
+        assert_eq!(r.is_error, Some(true), "{t:?}: {r:?}");
+        assert!(text_of(&r).contains("nosuchflag"), "{t:?}: {r:?}");
+
+        // So do commands that succeed: Rizin 0.10 reports `e` as OK when it
+        // refuses the value, saying so only in a message.
+        let text = text_of(&run("e asm.bits=7").await);
+        assert!(text.contains("cannot set '7'"), "{t:?}: {text}");
+        let r = run("ihj").await;
+        assert_eq!(r.is_error, Some(false), "{t:?}: {r:?}");
+        // The messages come as their own item, so the output stays JSON.
+        let output = &r.content[0].as_text().expect("text").text;
+        assert!(
+            serde_json::from_str::<Value>(output).is_ok(),
+            "{t:?}: {output}"
+        );
+        assert!(text_of(&r).contains("deprecated"), "{t:?}: {r:?}");
+    }
+}
+
 #[tokio::test]
 async fn empty_session_and_open_failures() {
     for t in transports() {

@@ -204,7 +204,9 @@ that failed is never mistaken for one that succeeded with no output:
   (e.g. `Cannot assemble 'mov'`) and whose `data` holds `command`, `status`
   (`ERROR`, `WRONG_ARGS`, `INVALID`, `NONEXISTINGCMD`) and `detail`.
 - The raw `command` tool returns a tool result with `isError: true` instead,
-  keeping whatever the line printed before it failed.
+  keeping whatever the line printed before it failed. It returns Rizin's
+  messages also when the command succeeded (e.g. `e asm.bits=7` is OK but
+  says `cannot set '7'`), as a text item after the output.
 - Invalid tool arguments stay `-32602` (`invalid params`).
 
 The diagnostics come from Rizin's log in-process, and from the `rizin`
@@ -212,7 +214,8 @@ process's stderr with the `pipe` backend (on Unix). Exact statuses need
 Rizin 0.10 (`rz_core_cmd_str_status()` and the `_s` command): with older
 Rizin the `api` backend only knows that a command failed (`FAILED`), and the
 `pipe` backend cannot tell (`UNKNOWN`), so it judges commands by their output
-as before.
+as before; the raw `command` tool takes a line that printed nothing but an
+`ERROR` message as failed.
 
 ## External plugins
 
