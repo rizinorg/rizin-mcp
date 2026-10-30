@@ -300,6 +300,36 @@ async fn search_rop_stays_in_range() {
 }
 
 #[tokio::test]
+async fn search_rop_does_not_depend_on_earlier_searches() {
+    for t in transports() {
+        let s = Session::start(t, |_| {}).await;
+        s.ok("open_file", json!({ "path": target(), "analysis": "none" }))
+            .await;
+        let (_, from, to) = s.code_window().await;
+        let mid = from + (to - from) / 2;
+        let search = |from: u64| {
+            let s = &s;
+            async move {
+                s.ok(
+                    "search_rop",
+                    json!({ "query": "ret", "from": format!("0x{from:x}"), "to": format!("0x{to:x}") }),
+                )
+                .await
+            }
+        };
+
+        // The same page in the same order, also after a wider search, and so
+        // paging stays consistent between calls.
+        let first = search(mid).await;
+        let again = search(mid).await;
+        assert_eq!(again, first, "{t:?}: a repeated search differs");
+        search(from).await;
+        let after_wider = search(mid).await;
+        assert_eq!(after_wider, first, "{t:?}: a wider search changed it");
+    }
+}
+
+#[tokio::test]
 async fn writes_are_verified() {
     for t in transports() {
         let s = Session::start(t, |c| c.allow_write = true).await;
